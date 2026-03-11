@@ -1,0 +1,374 @@
+/**
+ * editor.js — Éditeur Quill avec autosave, correcteur ortho et panneau IA
+ */
+const EditorView = (() => {
+  let _quill = null;
+  let _chapter = null;
+  let _project = null;
+  let _autosaveTimer = null;
+  let _isDirty = false;
+  let _isSaving = false;
+  let _autosaveInterval = 30000;
+  let _spellcheck = true;
+  let _focusMode = false;
+
+  const POV_OPTIONS = [
+    '', '1ère personne (je)', '3ème personne omnisciente',
+    '3ème personne limitée', '2ème personne (tu)', 'Multiple',
+  ];
+
+  async function render(projectId, chapterId) {
+    const view = document.getElementById('view');
+    const topbar = document.getElementById('topbar');
+
+    try {
+      _project = State.project || await API.projects.get(projectId);
+      State.setProject(_project);
+      _chapter = await API.chapters.get(chapterId);
+      State.setChapter(_chapter);
+    } catch (err) {
+      view.innerHTML = `<p class="text-muted" style="padding:32px">Erreur : ${err.message}</p>`;
+      return;
+    }
+
+    try {
+      const status = await API.ai.status();
+      State.setAiConfigured(status.configured);
+    } catch {}
+
+    const povOptions = POV_OPTIONS.map(p =>
+      `<option value="${p}" ${(_chapter.pov || '') === p ? 'selected' : ''}>${p || '— PDV —'}</option>`
+    ).join('');
+
+    topbar.innerHTML = `
+      <button class="btn btn-ghost btn-sm" onclick="window.location.hash='#/project/${projectId}'">
+        <i class="fa-solid fa-arrow-left"></i> Chapitres
+      </button>
+      <div class="topbar-title" style="font-size:14px;">${escHtml(_chapter.title)}</div>
+      <div class="topbar-subtitle" id="editor-word-count">${_chapter.word_count} mots</div>
+      <div class="topbar-actions">
+        <select class="form-control" style="width:auto;font-size:12px;" title="Point de vue" onchange="EditorView.updatePov(this.value)">
+          ${povOptions}
+        </select>
+        <button class="btn btn-secondary btn-sm" onclick="EditorView.saveNow()" title="Sauvegarder (Ctrl+S)">
+          <i class="fa-solid fa-floppy-disk"></i> Sauvegarder
+        </button>
+        <button class="btn btn-secondary btn-sm" id="ai-toggle-btn" onclick="AIPanel.toggle()" title="Assistant IA">
+          <i class="fa-solid fa-wand-magic-sparkles"></i> IA
+        </button>
+        <select class="form-control" style="width:auto;font-size:12px;" onchange="EditorView.updateStatus(this.value)">
+          <option value="brouillon" ${_chapter.status==='brouillon'?'selected':''}>Brouillon</option>
+          <option value="en_cours" ${_chapter.status==='en_cours'?'selected':''}>En cours</option>
+          <option value="terminé" ${_chapter.status==='terminé'?'selected':''}>Terminé ✓</option>
+        </select>
+      </div>
+    `;
+
+    view.innerHTML = `
+      <div class="editor-layout">
+        <div class="editor-main">
+          <!-- Barre d'outils -->
+          <div class="editor-toolbar" id="editor-toolbar">
+
+            <!-- Formatage texte -->
+            <button class="ql-toolbar-btn" onclick="EditorView.format('bold')" title="Gras (Ctrl+B)">
+              <i class="fa-solid fa-bold"></i>
+            </button>
+            <button class="ql-toolbar-btn" onclick="EditorView.format('italic')" title="Italique (Ctrl+I)">
+              <i class="fa-solid fa-italic"></i>
+            </button>
+            <button class="ql-toolbar-btn" onclick="EditorView.format('underline')" title="Souligné">
+              <i class="fa-solid fa-underline"></i>
+            </button>
+            <button class="ql-toolbar-btn" onclick="EditorView.format('strike')" title="Barré">
+              <i class="fa-solid fa-strikethrough"></i>
+            </button>
+
+            <div class="editor-toolbar-sep"></div>
+
+            <!-- Titres -->
+            <button class="ql-toolbar-btn" onclick="EditorView.formatBlock('header',1)" title="Titre 1">H1</button>
+            <button class="ql-toolbar-btn" onclick="EditorView.formatBlock('header',2)" title="Titre 2">H2</button>
+            <button class="ql-toolbar-btn" onclick="EditorView.formatBlock('header',false)" title="Paragraphe">
+              <i class="fa-solid fa-paragraph"></i>
+            </button>
+
+            <div class="editor-toolbar-sep"></div>
+
+            <!-- Alignement -->
+            <button class="ql-toolbar-btn" onclick="EditorView.formatAlign('left')" title="Gauche">
+              <i class="fa-solid fa-align-left"></i>
+            </button>
+            <button class="ql-toolbar-btn" onclick="EditorView.formatAlign('center')" title="Centre">
+              <i class="fa-solid fa-align-center"></i>
+            </button>
+            <button class="ql-toolbar-btn" onclick="EditorView.formatAlign('justify')" title="Justifier">
+              <i class="fa-solid fa-align-justify"></i>
+            </button>
+
+            <div class="editor-toolbar-sep"></div>
+
+            <!-- Citation & listes -->
+            <button class="ql-toolbar-btn" onclick="EditorView.format('blockquote')" title="Citation">
+              <i class="fa-solid fa-quote-left"></i>
+            </button>
+            <button class="ql-toolbar-btn" onclick="EditorView.formatBlock('list','bullet')" title="Liste à puces">
+              <i class="fa-solid fa-list-ul"></i>
+            </button>
+            <button class="ql-toolbar-btn" onclick="EditorView.formatBlock('list','ordered')" title="Liste numérotée">
+              <i class="fa-solid fa-list-ol"></i>
+            </button>
+
+            <div class="editor-toolbar-sep"></div>
+
+            <!-- Taille de police -->
+            <select class="form-control" style="width:auto;font-size:12px;" onchange="EditorView.formatSize(this.value)" title="Taille de police">
+              <option value="false">Taille</option>
+              <option value="small">Petite</option>
+              <option value="false" selected>Normale</option>
+              <option value="large">Grande</option>
+              <option value="huge">Très grande</option>
+            </select>
+
+            <div class="editor-toolbar-sep"></div>
+
+            <!-- Marqueurs de couleur -->
+            <span style="font-size:11px;color:var(--text-muted);align-self:center;margin-right:2px;">Surligner :</span>
+            <button class="ql-toolbar-btn" style="background:#fff176;color:#333;" onclick="EditorView.highlight('#fff176')" title="Surligner en jaune">A</button>
+            <button class="ql-toolbar-btn" style="background:#ff8a80;color:#333;" onclick="EditorView.highlight('#ff8a80')" title="Surligner en rouge">A</button>
+            <button class="ql-toolbar-btn" style="background:#69f0ae;color:#333;" onclick="EditorView.highlight('#69f0ae')" title="Surligner en vert">A</button>
+            <button class="ql-toolbar-btn" style="background:#80d8ff;color:#333;" onclick="EditorView.highlight('#80d8ff')" title="Surligner en bleu">A</button>
+            <button class="ql-toolbar-btn" style="background:#ea80fc;color:#333;" onclick="EditorView.highlight('#ea80fc')" title="Surligner en violet">A</button>
+            <button class="ql-toolbar-btn" onclick="EditorView.highlight(false)" title="Effacer le surlignage">✕</button>
+
+            <div class="editor-toolbar-sep"></div>
+
+            <!-- Correcteur orthographique toggle -->
+            <button class="ql-toolbar-btn ${_spellcheck ? 'active' : ''}" id="spellcheck-btn"
+              onclick="EditorView.toggleSpellcheck()" title="Correcteur orthographique (navigateur)">
+              <i class="fa-solid fa-spell-check"></i>
+            </button>
+
+            <!-- Mode Focus -->
+            <button class="ql-toolbar-btn" id="focus-btn"
+              onclick="EditorView.toggleFocus()" title="Mode plein écran (F11)">
+              <i class="fa-solid fa-expand"></i>
+            </button>
+
+            <!-- Relecture IA — bouton proéminent -->
+            <button class="ql-toolbar-btn btn-relecture ${!State.aiConfigured ? 'disabled' : ''}"
+              id="relecture-btn"
+              onclick="EditorView.runRelecture()"
+              title="${State.aiConfigured ? 'Relecture IA — syntaxe, cohérence, style' : 'Clé API requise (Paramètres)'}"
+              ${!State.aiConfigured ? 'disabled' : ''}>
+              <i class="fa-solid fa-glasses"></i>
+              <span style="font-size:12px;margin-left:4px">Relecture IA</span>
+            </button>
+          </div>
+
+          <!-- Zone d'écriture -->
+          <div class="editor-wrapper">
+            <div class="editor-paper">
+              <div id="quill-editor" spellcheck="${_spellcheck}"></div>
+            </div>
+          </div>
+
+          <!-- Barre de statut -->
+          <div class="editor-status">
+            <div class="editor-status-dot saved" id="save-dot"></div>
+            <span id="save-status">Sauvegardé</span>
+            <span>•</span>
+            <span id="live-word-count">${_chapter.word_count} mots</span>
+            ${_chapter.word_goal > 0 ? `
+            <span>•</span>
+            <span id="wg-progress" style="color:var(--accent);">
+              objectif : ${_chapter.word_goal} mots
+            </span>
+            ` : ''}
+            <span>•</span>
+            <span id="spellcheck-status" style="color:${_spellcheck?'var(--accent)':'var(--text-muted)'}">
+              <i class="fa-solid fa-spell-check"></i> ${_spellcheck ? 'Correcteur actif' : 'Correcteur désactivé'}
+            </span>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Initialiser Quill
+    _quill = new Quill('#quill-editor', {
+      theme: 'snow',
+      modules: { toolbar: false },
+      placeholder: 'Commencez à écrire votre chapitre...',
+    });
+
+    // Activer le spellcheck sur l'éditeur
+    _quill.root.setAttribute('spellcheck', _spellcheck);
+
+    if (_chapter.content) _quill.root.innerHTML = _chapter.content;
+
+    // Panneau IA
+    AIPanel.init({
+      getContent: () => _quill.root.innerText,
+      getContext: () => _project ? _project.synopsis : '',
+      projectId: parseInt(projectId),
+      chapterId: parseInt(chapterId),
+    });
+    AIPanel.inject(document.querySelector('.editor-layout'));
+
+    _quill.on('text-change', onTextChange);
+    document.addEventListener('keydown', onKeyDown);
+
+    const interval = parseInt(localStorage.getItem('autosave_interval') || '30');
+    _autosaveInterval = (interval || 30) * 1000;
+    startAutosave();
+
+    Sidebar.render();
+  }
+
+  function toggleSpellcheck() {
+    _spellcheck = !_spellcheck;
+    if (_quill) _quill.root.setAttribute('spellcheck', _spellcheck);
+    const btn = document.getElementById('spellcheck-btn');
+    const status = document.getElementById('spellcheck-status');
+    if (btn) btn.classList.toggle('active', _spellcheck);
+    if (status) {
+      status.style.color = _spellcheck ? 'var(--accent)' : 'var(--text-muted)';
+      status.innerHTML = `<i class="fa-solid fa-spell-check"></i> ${_spellcheck ? 'Correcteur actif' : 'Correcteur désactivé'}`;
+    }
+    Toast.info(_spellcheck ? 'Correcteur orthographique activé' : 'Correcteur orthographique désactivé');
+  }
+
+  function toggleFocus() {
+    _focusMode = !_focusMode;
+    document.body.classList.toggle('focus-mode', _focusMode);
+    const btn = document.getElementById('focus-btn');
+    if (btn) {
+      btn.classList.toggle('active', _focusMode);
+      btn.innerHTML = _focusMode
+        ? '<i class="fa-solid fa-compress"></i>'
+        : '<i class="fa-solid fa-expand"></i>';
+      btn.title = _focusMode ? 'Quitter le mode focus (Echap)' : 'Mode plein écran (F11)';
+    }
+    if (_focusMode) Toast.info('Mode focus activé — Appuyez sur Echap pour quitter');
+  }
+
+  function highlight(color) {
+    if (!_quill) return;
+    _quill.format('background', color || false);
+  }
+
+  async function runRelecture() {
+    if (!State.aiConfigured) {
+      Toast.error('Configurez votre clé API dans Paramètres pour utiliser la relecture IA.');
+      return;
+    }
+    const text = _quill ? _quill.root.innerText : '';
+    if (!text.trim()) { Toast.error('Aucun texte à relire'); return; }
+
+    AIPanel.open();
+    AIPanel.runRelecture(text, _project?.synopsis || '');
+  }
+
+  function onTextChange() {
+    _isDirty = true;
+    updateWordCount();
+    setSaveStatus('unsaved');
+  }
+
+  function updateWordCount() {
+    const text = _quill.getText();
+    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    const el = document.getElementById('live-word-count');
+    if (el) el.textContent = `${words} mots`;
+    const el2 = document.getElementById('editor-word-count');
+    if (el2) el2.textContent = `${words} mots`;
+    // Mise à jour barre objectif
+    const wgEl = document.getElementById('wg-progress');
+    if (wgEl && _chapter?.word_goal > 0) {
+      const pct = Math.min(100, Math.round((words / _chapter.word_goal) * 100));
+      wgEl.textContent = `objectif : ${words}/${_chapter.word_goal} mots (${pct}%)`;
+      wgEl.style.color = pct >= 100 ? '#4aaa6a' : 'var(--accent)';
+    }
+  }
+
+  function setSaveStatus(status) {
+    const dot = document.getElementById('save-dot');
+    const txt = document.getElementById('save-status');
+    if (!dot || !txt) return;
+    if (status === 'saved') { dot.className = 'editor-status-dot saved'; txt.textContent = 'Sauvegardé'; }
+    else if (status === 'saving') { dot.className = 'editor-status-dot saving'; txt.textContent = 'Sauvegarde...'; }
+    else { dot.className = 'editor-status-dot'; txt.textContent = 'Non sauvegardé'; }
+  }
+
+  function startAutosave() {
+    _autosaveTimer = setInterval(() => { if (_isDirty && !_isSaving) saveNow(); }, _autosaveInterval);
+  }
+
+  async function saveNow() {
+    if (!_chapter || !_quill) return;
+    _isSaving = true;
+    setSaveStatus('saving');
+    try {
+      await API.chapters.update(_chapter.id, { content: _quill.root.innerHTML, title: _chapter.title });
+      _isDirty = false;
+      setSaveStatus('saved');
+    } catch (err) {
+      Toast.error('Erreur de sauvegarde : ' + err.message);
+      setSaveStatus('unsaved');
+    } finally { _isSaving = false; }
+  }
+
+  function onKeyDown(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveNow(); }
+    if (e.key === 'Escape' && _focusMode) toggleFocus();
+    if (e.key === 'F11' && !e.ctrlKey) { e.preventDefault(); toggleFocus(); }
+  }
+
+  function format(type) {
+    if (!_quill) return;
+    _quill.format(type, !_quill.getFormat()[type]);
+  }
+
+  function formatBlock(type, value) {
+    if (!_quill) return;
+    _quill.format(type, value);
+  }
+
+  function formatAlign(align) {
+    if (!_quill) return;
+    _quill.format('align', align === 'left' ? false : align);
+  }
+
+  function formatSize(size) {
+    if (!_quill) return;
+    _quill.format('size', size === 'false' ? false : size);
+  }
+
+  async function updateStatus(status) {
+    if (!_chapter) return;
+    try {
+      await API.chapters.update(_chapter.id, { status });
+      _chapter.status = status;
+    } catch (err) { Toast.error(err.message); }
+  }
+
+  async function updatePov(pov) {
+    if (!_chapter) return;
+    try {
+      await API.chapters.update(_chapter.id, { pov });
+      _chapter.pov = pov;
+    } catch (err) { Toast.error(err.message); }
+  }
+
+  function cleanup() {
+    if (_autosaveTimer) clearInterval(_autosaveTimer);
+    document.removeEventListener('keydown', onKeyDown);
+    if (_focusMode) document.body.classList.remove('focus-mode');
+    _quill = null; _chapter = null; _focusMode = false;
+  }
+
+  function escHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  return { render, saveNow, format, formatBlock, formatAlign, formatSize, updateStatus, updatePov,
+           toggleSpellcheck, toggleFocus, highlight, runRelecture, cleanup };
+})();

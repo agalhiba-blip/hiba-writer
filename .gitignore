@@ -1,0 +1,15 @@
+.venv/
+data/
+exports/
+uploads/characters/*.jpg
+uploads/characters/*.png
+uploads/characters/*.webp
+uploads/characters/*.gif
+__pycache__/
+**/__pycache__/
+*.pyc
+*.db
+.env
+Downloads/
+*.msi
+*.zip

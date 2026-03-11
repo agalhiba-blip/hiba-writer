@@ -1,0 +1,9 @@
+.venv/
+data/
+exports/
+uploads/
+**/__pycache__/
+*.pyc
+*.db
+start.bat
+.env
