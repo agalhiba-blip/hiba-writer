@@ -16,9 +16,12 @@ if _DATABASE_URL:
     DATABASE_URL = _DATABASE_URL
     engine = create_async_engine(DATABASE_URL, echo=False)
 else:
-    # SQLite pour le développement local
-    DB_PATH = os.path.join(BASE_DIR, "data", "roman_writer.db")
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    # SQLite — local: dossier data/, Vercel: /tmp/
+    if os.environ.get("VERCEL") or os.environ.get("VERCEL_ENV"):
+        DB_PATH = "/tmp/roman_writer.db"
+    else:
+        DB_PATH = os.path.join(BASE_DIR, "data", "roman_writer.db")
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"
     engine = create_async_engine(DATABASE_URL, echo=False)
 
