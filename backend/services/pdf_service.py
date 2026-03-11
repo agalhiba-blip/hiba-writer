@@ -2,126 +2,115 @@ import re
 import io
 
 
-def html_to_text(html: str) -> str:
-    """Convertit HTML en texte propre."""
-    html = re.sub(r'<br\s*/?>', '\n', html)
-    html = re.sub(r'</p>', '\n\n', html)
-    html = re.sub(r'<[^>]+>', '', html)
-    return html.strip()
+def _clean_text(text: str) -> str:
+    """Remplace les caractères Unicode non supportés par leurs équivalents ASCII."""
+    replacements = {
+        '\u2014': ' - ', '\u2013': ' - ', '\u2012': '-',
+        '\u201c': '"', '\u201d': '"', '\u201e': '"',
+        '\u2018': "'", '\u2019': "'", '\u201a': "'",
+        '\u2026': '...', '\u00ab': '"', '\u00bb': '"',
+        '\u2022': '*', '\u00a0': ' ',
+    }
+    for char, repl in replacements.items():
+        text = text.replace(char, repl)
+    return text
+
+
+def _strip_html(html: str) -> str:
+    """Retire les balises HTML et retourne le texte propre."""
+    h = re.sub(r'<br\s*/?>', '\n', html or '')
+    h = re.sub(r'</p>', '\n', h)
+    h = re.sub(r'<[^>]+>', '', h)
+    h = re.sub(r'&nbsp;', ' ', h)
+    h = re.sub(r'&amp;', '&', h)
+    h = re.sub(r'&lt;', '<', h)
+    h = re.sub(r'&gt;', '>', h)
+    return h.strip()
+
+
+def _hex_to_rgb(hex_color: str):
+    """Convertit une couleur hex (#RRGGBB) en tuple (R, G, B)."""
+    hex_color = hex_color.lstrip('#')
+    if len(hex_color) != 6:
+        return (114, 123, 87)  # couleur par défaut
+    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
 
 
 def generate_novel_pdf(project: dict, chapters: list) -> bytes:
     """Génère un PDF du roman et retourne les bytes."""
-    from xhtml2pdf import pisa
+    from fpdf import FPDF
 
     cover_color = project.get("cover_color", "#727B57")
     title = project.get("title", "Mon Roman")
     author = project.get("author", "")
     subtitle = project.get("subtitle", "")
+    r, g, b = _hex_to_rgb(cover_color)
 
-    chapters_html = ""
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=25)
+    pdf.set_margins(30, 25, 30)
+
+    # ── Page de couverture ────────────────────────────────────────────────────
+    pdf.add_page()
+    pdf.ln(60)
+
+    # Titre
+    pdf.set_font("Helvetica", "B", 28)
+    pdf.set_text_color(26, 26, 26)
+    pdf.multi_cell(0, 12, _clean_text(title), align="C")
+    pdf.ln(4)
+
+    # Ligne décorative
+    pdf.set_fill_color(r, g, b)
+    page_w = pdf.w - pdf.l_margin - pdf.r_margin
+    pdf.set_x(pdf.l_margin + page_w / 2 - 20)
+    pdf.cell(40, 3, "", fill=True)
+    pdf.ln(8)
+
+    # Sous-titre
+    if subtitle:
+        pdf.set_font("Helvetica", "I", 14)
+        pdf.set_text_color(85, 85, 85)
+        pdf.multi_cell(0, 8, _clean_text(subtitle), align="C")
+        pdf.ln(4)
+
+    # Auteur
+    if author:
+        pdf.ln(20)
+        pdf.set_font("Helvetica", "", 13)
+        pdf.set_text_color(51, 51, 51)
+        pdf.multi_cell(0, 8, _clean_text(author).upper(), align="C")
+
+    # ── Chapitres ─────────────────────────────────────────────────────────────
     for i, chapter in enumerate(chapters):
-        content = chapter.get("content", "")
-        chapters_html += f"""
-        <div class="chapter">
-            <h2 class="chapter-title">Chapitre {i + 1} — {chapter.get('title', '')}</h2>
-            <div class="chapter-content">{content}</div>
-        </div>
-        """
+        pdf.add_page()
 
-    html_content = f"""
-    <!DOCTYPE html>
-    <html lang="fr">
-    <head>
-        <meta charset="UTF-8">
-        <style>
-            @page {{
-                size: A4;
-                margin: 2.5cm 3cm;
-                @bottom-center {{
-                    content: counter(page);
-                    font-family: Georgia, serif;
-                    font-size: 10pt;
-                    color: #666;
-                }}
-            }}
-            body {{
-                font-family: Georgia, "Times New Roman", serif;
-                font-size: 12pt;
-                line-height: 1.8;
-                color: #1a1a1a;
-                text-align: justify;
-            }}
-            .cover {{
-                page-break-after: always;
-                text-align: center;
-                padding-top: 6cm;
-            }}
-            .cover-accent {{
-                width: 60px;
-                height: 4px;
-                background-color: {cover_color};
-                margin: 20px auto;
-            }}
-            .cover-title {{
-                font-size: 28pt;
-                font-weight: bold;
-                color: #1a1a1a;
-                margin-bottom: 0.3cm;
-                letter-spacing: 1px;
-            }}
-            .cover-subtitle {{
-                font-size: 14pt;
-                color: #555;
-                font-style: italic;
-                margin-bottom: 0.5cm;
-            }}
-            .cover-author {{
-                font-size: 13pt;
-                color: #333;
-                margin-top: 2cm;
-                letter-spacing: 2px;
-                text-transform: uppercase;
-            }}
-            .chapter {{
-                page-break-before: always;
-            }}
-            .chapter:first-child {{
-                page-break-before: avoid;
-            }}
-            .chapter-title {{
-                font-size: 16pt;
-                color: {cover_color};
-                margin-bottom: 1cm;
-                padding-bottom: 0.3cm;
-                border-bottom: 1px solid {cover_color};
-                font-weight: bold;
-            }}
-            .chapter-content p {{
-                margin-bottom: 0.5em;
-                text-indent: 1.5em;
-            }}
-            .chapter-content p:first-child {{
-                text-indent: 0;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="cover">
-            <div class="cover-title">{title}</div>
-            {"<div class='cover-subtitle'>" + subtitle + "</div>" if subtitle else ""}
-            <div class="cover-accent"></div>
-            {"<div class='cover-author'>" + author + "</div>" if author else ""}
-        </div>
-        {chapters_html}
-    </body>
-    </html>
-    """
+        # Titre du chapitre
+        pdf.set_font("Helvetica", "B", 16)
+        pdf.set_text_color(r, g, b)
+        ch_title = _clean_text(f"Chapitre {i + 1} - {chapter.get('title', '')}")
+        pdf.multi_cell(0, 10, ch_title, align="L")
+
+        # Ligne sous le titre
+        pdf.set_draw_color(r, g, b)
+        pdf.set_line_width(0.5)
+        pdf.line(pdf.l_margin, pdf.get_y() + 2, pdf.w - pdf.r_margin, pdf.get_y() + 2)
+        pdf.ln(10)
+
+        # Contenu
+        pdf.set_font("Times", "", 12)
+        pdf.set_text_color(26, 26, 26)
+        content = _clean_text(_strip_html(chapter.get("content", "")))
+
+        # Découper en paragraphes
+        paragraphs = [p.strip() for p in content.split('\n') if p.strip()]
+        first = True
+        for para in paragraphs:
+            if not first:
+                pdf.ln(3)
+            pdf.multi_cell(0, 7, para, align="J")
+            first = False
 
     output = io.BytesIO()
-    result = pisa.CreatePDF(html_content, dest=output, encoding='utf-8')
-
-    if result.err:
-        raise RuntimeError(f"Erreur lors de la génération du PDF : {result.err}")
-
+    pdf.output(output)
     return output.getvalue()
