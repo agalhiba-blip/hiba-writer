@@ -13,3 +13,5 @@ __pycache__/
 Downloads/
 *.msi
 *.zip
+
+.vercel
