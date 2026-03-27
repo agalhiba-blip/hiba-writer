@@ -83,6 +83,30 @@ const AIPanel = (() => {
               <div class="ai-btn-desc">2-3 phrases clés</div>
             </div>
           </button>
+
+          <!-- Demande libre -->
+          <div style="margin-top:8px;border-top:1px solid var(--border);padding-top:12px;">
+            <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">
+              <i class="fa-solid fa-comment-dots" style="margin-right:4px"></i>Demande personnalisée
+            </div>
+            <textarea
+              id="ai-custom-input"
+              placeholder="Ex : Rends ce passage plus mystérieux, change les métaphores, ajoute plus de tension…"
+              ${!configured ? 'disabled' : ''}
+              style="width:100%;box-sizing:border-box;background:var(--bg-secondary);border:1px solid var(--border);
+                     border-radius:8px;color:var(--text);font-size:13px;padding:10px;resize:vertical;
+                     min-height:72px;font-family:inherit;outline:none;"
+              onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){AIPanel.runCustom();}"
+            ></textarea>
+            <button
+              onclick="AIPanel.runCustom()"
+              ${!configured ? 'disabled' : ''}
+              style="margin-top:8px;width:100%;background:var(--accent);color:#fff;border:none;
+                     border-radius:8px;padding:9px 14px;font-size:13px;font-weight:600;cursor:pointer;
+                     display:flex;align-items:center;justify-content:center;gap:6px;">
+              <i class="fa-solid fa-paper-plane"></i> Envoyer
+            </button>
+          </div>
         </div>
 
         <div class="ai-panel-result" id="ai-result">
@@ -119,6 +143,31 @@ const AIPanel = (() => {
     await _executeAI('review', text, context, resultDiv);
   }
 
+  async function runCustom() {
+    const input = document.getElementById('ai-custom-input');
+    const instruction = input ? input.value.trim() : '';
+    if (!instruction) {
+      Toast.error('Écrivez votre demande avant d\'envoyer.');
+      return;
+    }
+    const resultDiv = document.getElementById('ai-result');
+    if (!resultDiv) return;
+
+    const selection = window.getSelection();
+    let text = '';
+    if (selection && selection.toString().trim()) {
+      text = selection.toString().trim();
+    } else {
+      text = _getEditorContent ? _getEditorContent() : '';
+    }
+    if (!text) {
+      Toast.error('Aucun texte à analyser. Écrivez quelque chose ou sélectionnez du texte.');
+      return;
+    }
+    const context = _getProjectContext ? _getProjectContext() : '';
+    await _executeAI('custom', text, context, resultDiv, instruction);
+  }
+
   async function run(action) {
     const resultDiv = document.getElementById('ai-result');
     if (!resultDiv) return;
@@ -139,13 +188,14 @@ const AIPanel = (() => {
     await _executeAI(action, text, context, resultDiv);
   }
 
-  async function _executeAI(action, text, context, resultDiv) {
+  async function _executeAI(action, text, context, resultDiv, instruction = '') {
     const labels = {
       review: 'Relecture complète',
       improve: 'Style amélioré',
       proofread: 'Orthographe corrigée',
       continue: 'Continuation',
       summarize: 'Résumé',
+      custom: instruction || 'Demande personnalisée',
     };
 
     // Afficher le header du résultat immédiatement avec zone de texte vide
@@ -169,11 +219,11 @@ const AIPanel = (() => {
     let accumulated = '';
 
     // Actions qui peuvent être appliquées directement dans l'éditeur
-    const applyableActions = ['improve', 'proofread', 'continue', 'review'];
+    const applyableActions = ['improve', 'proofread', 'continue', 'review', 'custom'];
     const canApply = applyableActions.includes(action) &&
                      typeof EditorView !== 'undefined' && EditorView.applyAISuggestion;
 
-    const payload = { text, context, project_id: _currentProjectId, chapter_id: _currentChapterId };
+    const payload = { text, context, project_id: _currentProjectId, chapter_id: _currentChapterId, instruction };
 
     API.ai.stream(
       action,
@@ -231,5 +281,5 @@ const AIPanel = (() => {
     return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
   }
 
-  return { init, inject, toggle, open, run, runRelecture, copyResult };
+  return { init, inject, toggle, open, run, runCustom, runRelecture, copyResult };
 })();

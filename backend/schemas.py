@@ -232,6 +232,7 @@ class AIRequest(BaseModel):
     project_id: Optional[int] = None
     chapter_id: Optional[int] = None
     context: Optional[str] = ""
+    instruction: Optional[str] = ""
 
 
 class TranslateRequest(BaseModel):

@@ -91,12 +91,18 @@ STREAM_SYSTEMS = {
         "puis fournis le texte intégralement corrigé et amélioré. "
         "Conserve le sens, les personnages et l'intention de l'auteur."
     ),
+    "custom": (
+        "Tu es un assistant de rédaction littéraire expert en français. "
+        "Applique précisément l'instruction de l'auteur sur le texte fourni. "
+        "Si l'instruction demande une réécriture, fournis uniquement le texte modifié. "
+        "Si c'est une question ou une analyse, réponds clairement et concisément."
+    ),
 }
 
 # max_tokens adapté à chaque action pour plus de rapidité
 STREAM_MAX_TOKENS = {
     "improve": 2048, "proofread": 2048, "review": 3000,
-    "continue": 512, "summarize": 256,
+    "continue": 512, "summarize": 256, "custom": 2048,
 }
 
 
@@ -123,6 +129,8 @@ async def stream_ai(
     prompt = request.text
     if request.context:
         prompt = f"Contexte du roman : {request.context}\n\n{prompt}"
+    if action == "custom" and request.instruction:
+        prompt = f"Instruction : {request.instruction}\n\nTexte :\n{prompt}"
 
     async def generate():
         full_text = []
