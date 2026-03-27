@@ -9,6 +9,9 @@ const DashboardView = (() => {
     topbar.innerHTML = `
       <div class="topbar-title">Mes romans</div>
       <div class="topbar-actions">
+        <button class="btn btn-secondary" onclick="DashboardView.restoreBackup()" title="Restaurer depuis une sauvegarde JSON">
+          <i class="fa-solid fa-clock-rotate-left"></i> Restaurer
+        </button>
         <button class="btn btn-secondary" onclick="DashboardView.importDocument()" title="Importer un document Word ou texte">
           <i class="fa-solid fa-file-import"></i> Importer
         </button>
@@ -329,6 +332,64 @@ const DashboardView = (() => {
     });
   }
 
+  // ── Restauration depuis sauvegarde JSON ──────────────────────────────────
+
+  function restoreBackup() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const backup = JSON.parse(text);
+        if (!backup.project || !backup.chapters) {
+          Toast.error('Fichier invalide — ce n\'est pas une sauvegarde HIBA-WRITER');
+          return;
+        }
+        Toast.info('Restauration en cours...');
+
+        // Créer le projet
+        const { id: _, created_at, updated_at, word_count, ...projectData } = backup.project;
+        const project = await API.projects.create(projectData);
+        _cacheProject(project);
+
+        // Recréer les chapitres dans l'ordre
+        const sorted = [...(backup.chapters || [])].sort((a,b) => a.order_index - b.order_index);
+        for (let i = 0; i < sorted.length; i++) {
+          const { id, project_id, created_at, updated_at, word_count, ...chData } = sorted[i];
+          await API.chapters.create({ ...chData, project_id: project.id, order_index: i });
+        }
+
+        // Recréer personnages
+        for (const c of (backup.characters || [])) {
+          const { id, project_id, created_at, updated_at, image_path, ...cData } = c;
+          await API.characters.create({ ...cData, project_id: project.id }).catch(() => {});
+        }
+
+        // Recréer lieux
+        for (const l of (backup.locations || [])) {
+          const { id, project_id, created_at, updated_at, image_path, ...lData } = l;
+          await API.locations.create({ ...lData, project_id: project.id }).catch(() => {});
+        }
+
+        // Recréer notes
+        for (const n of (backup.notes || [])) {
+          const { id, project_id, created_at, updated_at, ...nData } = n;
+          await API.notes.create({ ...nData, project_id: project.id }).catch(() => {});
+        }
+
+        Toast.success(`Roman "${project.title}" restauré avec ${sorted.length} chapitre(s) !`);
+        State.setProject(project);
+        window.location.hash = `#/project/${project.id}/hub`;
+      } catch (err) {
+        Toast.error('Erreur restauration : ' + err.message);
+      }
+    };
+    input.click();
+  }
+
   // ── Cache localStorage ────────────────────────────────────────────────────
 
   function _loadCachedProjects() {
@@ -377,5 +438,5 @@ const DashboardView = (() => {
     return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
-  return { render, openProject, createProject, importDocument, onImportFileSelect };
+  return { render, openProject, createProject, importDocument, onImportFileSelect, restoreBackup };
 })();

@@ -70,6 +70,10 @@ const ProjectHubView = (() => {
       <div class="topbar-title">${escHtml(project.title)}</div>
       <div class="topbar-subtitle">${escHtml(project.genre || '')}</div>
       <div class="topbar-actions">
+        <button class="btn btn-primary btn-sm" onclick="ProjectHubView.saveBackup(${projectId})"
+          title="Sauvegarder tout le roman (projet + chapitres + personnages + notes) en fichier JSON">
+          <i class="fa-solid fa-floppy-disk"></i> Sauvegarder
+        </button>
         <button class="btn btn-secondary btn-sm" onclick="ProjectHubView.openTranslateModal(${projectId})"
           title="Traduire le roman en anglais, arabe, japonais ou chinois">
           <i class="fa-solid fa-language"></i> Traduire
@@ -240,6 +244,59 @@ const ProjectHubView = (() => {
     `;
 
     Sidebar.render();
+  }
+
+  // ── Sauvegarde complète JSON ─────────────────────────────────────────────
+
+  async function saveBackup(projectId) {
+    Toast.info('Préparation de la sauvegarde...');
+    try {
+      const project = State.project || await API.projects.get(projectId);
+
+      // Charger tout le contenu en parallèle
+      const [chapters, characters, locations, notes] = await Promise.all([
+        API.chapters.list(projectId).catch(() => []),
+        API.characters.list(projectId).catch(() => []),
+        API.locations.list(projectId).catch(() => []),
+        API.notes.list(projectId).catch(() => []),
+      ]);
+
+      // Charger le contenu complet de chaque chapitre
+      const fullChapters = await Promise.all(
+        chapters.map(c => API.chapters.get(c.id).catch(() => c))
+      );
+
+      const backup = {
+        version: '1.0',
+        exportedAt: new Date().toISOString(),
+        project,
+        chapters: fullChapters,
+        characters,
+        locations,
+        notes,
+      };
+
+      // Aussi mettre à jour le cache localStorage
+      try {
+        cacheProject(project);
+        localStorage.setItem(`hiba-chapters-${projectId}`, JSON.stringify(fullChapters));
+        localStorage.setItem(`hiba-backup-${projectId}`, JSON.stringify(backup));
+      } catch {}
+
+      // Télécharger le fichier JSON
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const date = new Date().toLocaleDateString('fr-FR').replace(/\//g, '-');
+      const filename = `${project.title.replace(/[^a-zA-Z0-9_\- ]/g,'_')}_sauvegarde_${date}.json`;
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+
+      Toast.success(`Sauvegarde téléchargée : ${filename}`);
+    } catch (err) {
+      Toast.error('Erreur sauvegarde : ' + err.message);
+    }
   }
 
   // ── Modal Traduction ─────────────────────────────────────────────────────
@@ -436,7 +493,7 @@ const ProjectHubView = (() => {
     return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
-  return { render, editProject, confirmDeleteProject, openTranslateModal, _copyTranslation };
+  return { render, editProject, confirmDeleteProject, openTranslateModal, _copyTranslation, saveBackup };
 })();
 
 // Helper pour export PDF depuis le hub (défini après chargement de tous les scripts)
