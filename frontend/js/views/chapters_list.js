@@ -16,7 +16,16 @@ const ChaptersListView = (() => {
     try {
       _project = State.project || await API.projects.get(projectId);
       State.setProject(_project);
-    } catch {}
+    } catch {
+      // Projet absent du serveur → charger depuis le cache
+      if (!_project) {
+        try {
+          const raw = localStorage.getItem(`hiba-project-${projectId}`);
+          if (raw) _project = JSON.parse(raw);
+        } catch {}
+      }
+      if (_project) State.setProject(_project);
+    }
 
     topbar.innerHTML = `
       <div class="topbar-title">${escHtml(_project?.title || 'Roman')}</div>
@@ -247,8 +256,10 @@ const ChaptersListView = (() => {
       async onConfirm(data) {
         if (!data.title.trim()) { Toast.error('Le titre est requis'); return; }
         try {
+          // S'assurer que le projet existe sur le serveur avant de créer le chapitre
+          const serverProjectId = await _ensureProjectOnServer(_projectId);
           const chapter = await API.chapters.create({
-            project_id: parseInt(_projectId),
+            project_id: serverProjectId,
             title: data.title,
             summary: data.summary || '',
             word_goal: parseInt(data.word_goal) || 0,
@@ -260,7 +271,7 @@ const ChaptersListView = (() => {
           Toast.success('Chapitre créé !');
           window.location.hash = `#/project/${_projectId}/chapter/${chapter.id}`;
         } catch (err) {
-          Toast.error(err.message);
+          Toast.error('Erreur : ' + err.message);
         }
       },
     });
@@ -803,6 +814,31 @@ const ChaptersListView = (() => {
     }
 
     return newChapters.length > 0 ? newChapters : cachedChapters;
+  }
+
+  // Vérifie que le projet existe sur le serveur, le recrée si besoin.
+  // Retourne l'ID serveur du projet (peut différer si recréé).
+  async function _ensureProjectOnServer(projectId) {
+    try {
+      await API.projects.get(parseInt(projectId));
+      return parseInt(projectId); // Projet OK
+    } catch {
+      // Projet absent → le recréer depuis le cache
+      const projRaw = localStorage.getItem(`hiba-project-${projectId}`);
+      const proj = projRaw ? JSON.parse(projRaw) : null;
+      if (!proj) throw new Error('Roman introuvable dans la sauvegarde locale. Allez sur le tableau de bord.');
+      const newProj = await API.projects.create({
+        title: proj.title || 'Mon roman',
+        genre: proj.genre || '',
+        synopsis: proj.synopsis || '',
+        word_goal: proj.word_goal || 0,
+      });
+      // Mettre à jour le cache avec le nouveau projet
+      localStorage.setItem(`hiba-project-${projectId}`, JSON.stringify({ ...proj, serverId: newProj.id }));
+      localStorage.setItem(`hiba-project-${newProj.id}`, JSON.stringify({ ...proj, id: newProj.id }));
+      _project = { ..._project, ...newProj };
+      return newProj.id;
+    }
   }
 
   function escHtml(s) {
