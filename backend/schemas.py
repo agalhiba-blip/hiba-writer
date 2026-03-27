@@ -234,6 +234,13 @@ class AIRequest(BaseModel):
     context: Optional[str] = ""
 
 
+class TranslateRequest(BaseModel):
+    text: str
+    language: str  # "en", "ar", "ja", "zh"
+    project_id: Optional[int] = None
+    chapter_id: Optional[int] = None
+
+
 class AIConfigUpdate(BaseModel):
     anthropic_api_key: str
     claude_model: str = "claude-sonnet-4-6"

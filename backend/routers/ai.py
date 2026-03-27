@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from backend.database import get_db
 from backend.models import Setting
-from backend.schemas import AIRequest, AIConfigUpdate
+from backend.schemas import AIRequest, AIConfigUpdate, TranslateRequest
 from backend.services import ai_service
 
 router = APIRouter()
@@ -103,6 +103,26 @@ async def review(request: AIRequest, db: AsyncSession = Depends(get_db)):
         return {"result": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur IA : {str(e)}")
+
+
+@router.post("/translate")
+async def translate(request: TranslateRequest, db: AsyncSession = Depends(get_db)):
+    if not request.text.strip():
+        raise HTTPException(status_code=400, detail="Texte vide")
+    allowed = {"en", "ar", "ja", "zh"}
+    if request.language not in allowed:
+        raise HTTPException(status_code=400, detail=f"Langue non supportée : {request.language}")
+    api_key, _ = await ai_service.get_api_config(db)
+    if not api_key:
+        raise HTTPException(status_code=403, detail="Clé API non configurée")
+    try:
+        result = await ai_service.translate_text(
+            request.text, request.language,
+            db, request.project_id, request.chapter_id
+        )
+        return {"result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur traduction : {str(e)}")
 
 
 @router.post("/continue")

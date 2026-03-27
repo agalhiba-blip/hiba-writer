@@ -106,6 +106,28 @@ async def review_text(text: str, context: str, db: AsyncSession, project_id: int
     return result
 
 
+async def translate_text(text: str, language: str, db: AsyncSession, project_id: int = None, chapter_id: int = None) -> str:
+    """Traduit un texte dans la langue cible en préservant le style littéraire."""
+    api_key, model = await get_api_config(db)
+    lang_names = {
+        "en": "anglais",
+        "ar": "arabe",
+        "ja": "japonais",
+        "zh": "chinois simplifié",
+    }
+    lang_name = lang_names.get(language, language)
+    system = (
+        f"Tu es un traducteur littéraire expert. Traduis le texte suivant en {lang_name}, "
+        f"en préservant le style, le ton, le rythme et toutes les nuances littéraires de l'original. "
+        f"Si le texte contient du HTML (balises <p>, <em>, <strong>, etc.), conserve exactement les mêmes balises HTML dans la traduction. "
+        f"Réponds uniquement avec la traduction, sans aucune explication ni commentaire."
+    )
+    prompt = f"Traduis ce texte en {lang_name} :\n\n{text}"
+    result = await call_claude(prompt, system, api_key, model)
+    await save_history(db, f"translate_{language}", text, result, project_id, chapter_id)
+    return result
+
+
 async def save_history(db: AsyncSession, action_type: str, input_text: str, output_text: str, project_id: int = None, chapter_id: int = None):
     history = AIHistory(
         project_id=project_id,

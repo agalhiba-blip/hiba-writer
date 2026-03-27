@@ -164,6 +164,17 @@ const EditorView = (() => {
               <i class="fa-solid fa-glasses"></i>
               <span style="font-size:12px;margin-left:4px">Relecture IA</span>
             </button>
+
+            <!-- Traduction IA -->
+            <button class="ql-toolbar-btn ${!State.aiConfigured ? 'disabled' : ''}"
+              id="translate-btn"
+              onclick="EditorView.openTranslatePanel()"
+              title="${State.aiConfigured ? 'Traduire ce chapitre' : 'Clé API requise (Paramètres)'}"
+              ${!State.aiConfigured ? 'disabled' : ''}
+              style="margin-left:4px;background:var(--accent-soft,rgba(114,123,87,0.12));">
+              <i class="fa-solid fa-language"></i>
+              <span style="font-size:12px;margin-left:4px">Traduire</span>
+            </button>
           </div>
 
           <!-- Zone d'écriture -->
@@ -204,7 +215,23 @@ const EditorView = (() => {
     // Activer le spellcheck sur l'éditeur
     _quill.root.setAttribute('spellcheck', _spellcheck);
 
-    if (_chapter.content) _quill.root.innerHTML = _chapter.content;
+    // Charger le contenu : depuis l'API ou depuis le cache local si l'API est vide
+    if (_chapter.content) {
+      _quill.root.innerHTML = _chapter.content;
+    } else {
+      // Essayer de restaurer depuis localStorage si le serveur n'a pas le contenu
+      try {
+        const cached = localStorage.getItem(`hiba-chapter-${_chapter.id}`);
+        if (cached) {
+          const data = JSON.parse(cached);
+          if (data.content) {
+            _quill.root.innerHTML = data.content;
+            Toast.info('Contenu restauré depuis la sauvegarde locale');
+            _isDirty = true; // Marquer comme non-sauvegardé pour re-sync
+          }
+        }
+      } catch {}
+    }
 
     // Panneau IA
     AIPanel.init({
@@ -308,12 +335,21 @@ const EditorView = (() => {
     if (!_chapter || !_quill) return;
     _isSaving = true;
     setSaveStatus('saving');
+    const content = _quill.root.innerHTML;
+    // Toujours sauvegarder en local d'abord (backup fiable)
     try {
-      await API.chapters.update(_chapter.id, { content: _quill.root.innerHTML, title: _chapter.title });
+      localStorage.setItem(`hiba-chapter-${_chapter.id}`, JSON.stringify({
+        content,
+        title: _chapter.title,
+        savedAt: new Date().toISOString(),
+      }));
+    } catch {}
+    try {
+      await API.chapters.update(_chapter.id, { content, title: _chapter.title });
       _isDirty = false;
       setSaveStatus('saved');
     } catch (err) {
-      Toast.error('Erreur de sauvegarde : ' + err.message);
+      Toast.error('Erreur serveur — contenu sauvegardé localement');
       setSaveStatus('unsaved');
     } finally { _isSaving = false; }
   }
@@ -360,6 +396,78 @@ const EditorView = (() => {
     } catch (err) { Toast.error(err.message); }
   }
 
+  function openTranslatePanel() {
+    if (!State.aiConfigured) {
+      Toast.error('Configurez votre clé API Claude dans Paramètres.');
+      return;
+    }
+    Modal.open({
+      title: '<i class="fa-solid fa-language"></i> Traduire ce chapitre',
+      body: `
+        <div class="form-group">
+          <label class="form-label">Langue cible</label>
+          <select class="form-control" id="editor-translate-lang">
+            <option value="en">🇬🇧 Anglais</option>
+            <option value="ar">🇸🇦 Arabe</option>
+            <option value="ja">🇯🇵 Japonais</option>
+            <option value="zh">🇨🇳 Chinois (simplifié)</option>
+          </select>
+        </div>
+        <div id="editor-translate-result-area" style="display:none;margin-top:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <label class="form-label" style="margin:0">Traduction</label>
+            <button class="btn btn-sm btn-secondary" onclick="EditorView._copyTranslation()">
+              <i class="fa-solid fa-copy"></i> Copier
+            </button>
+          </div>
+          <textarea id="editor-translate-result-text" class="form-control" rows="12" readonly
+            style="font-size:13px;line-height:1.7;resize:vertical"></textarea>
+        </div>
+        <div id="editor-translate-loading" style="display:none;text-align:center;padding:24px;color:var(--text-muted)">
+          <i class="fa-solid fa-spinner fa-spin" style="font-size:24px;margin-bottom:8px;display:block"></i>
+          Traduction en cours...
+        </div>
+      `,
+      confirmText: '<i class="fa-solid fa-language"></i> Traduire',
+      cancelText: 'Fermer',
+      async onConfirm() {
+        const lang = document.getElementById('editor-translate-lang')?.value;
+        const loadingEl = document.getElementById('editor-translate-loading');
+        const resultArea = document.getElementById('editor-translate-result-area');
+        const resultText = document.getElementById('editor-translate-result-text');
+
+        const text = _quill ? _quill.root.innerText : '';
+        if (!text.trim()) { Toast.error('Aucun contenu à traduire'); return false; }
+
+        if (loadingEl) loadingEl.style.display = 'block';
+        if (resultArea) resultArea.style.display = 'none';
+
+        try {
+          const res = await API.ai.translate({
+            text,
+            language: lang,
+            project_id: _project ? _project.id : null,
+            chapter_id: _chapter ? _chapter.id : null,
+          });
+          if (resultText) resultText.value = res.result;
+          if (resultArea) resultArea.style.display = 'block';
+        } catch (err) {
+          Toast.error('Erreur traduction : ' + err.message);
+        } finally {
+          if (loadingEl) loadingEl.style.display = 'none';
+        }
+        return false; // Garder le modal ouvert
+      },
+    });
+  }
+
+  function _copyTranslation() {
+    const text = document.getElementById('editor-translate-result-text')?.value;
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => Toast.success('Copié !'))
+      .catch(() => Toast.error('Impossible de copier'));
+  }
+
   function cleanup() {
     if (_autosaveTimer) clearInterval(_autosaveTimer);
     document.removeEventListener('keydown', onKeyDown);
@@ -370,5 +478,6 @@ const EditorView = (() => {
   function escHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
   return { render, saveNow, format, formatBlock, formatAlign, formatSize, updateStatus, updatePov,
-           toggleSpellcheck, toggleFocus, highlight, runRelecture, cleanup };
+           toggleSpellcheck, toggleFocus, highlight, runRelecture, cleanup,
+           openTranslatePanel, _copyTranslation };
 })();

@@ -22,8 +22,22 @@ const DashboardView = (() => {
 
     try {
       const projects = await API.projects.list();
+      // Mettre en cache la liste pour la récupération hors-ligne
+      try { localStorage.setItem('hiba-projects-list', JSON.stringify(projects)); } catch {}
       renderProjects(projects);
     } catch (err) {
+      // Tenter de charger depuis le cache local si le serveur est indisponible
+      try {
+        const cached = localStorage.getItem('hiba-projects-list');
+        if (cached) {
+          const projects = JSON.parse(cached);
+          if (projects.length > 0) {
+            Toast.info('Données chargées depuis le cache local');
+            renderProjects(projects);
+            return;
+          }
+        }
+      } catch {}
       view.innerHTML = `<div class="dashboard"><p class="text-muted">Erreur : ${err.message}</p></div>`;
     }
   }

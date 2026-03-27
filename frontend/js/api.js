@@ -85,6 +85,7 @@ const API = (() => {
     summarize: (data) => request('POST', '/api/ai/summarize', data),
     continue: (data) => request('POST', '/api/ai/continue', data),
     review: (data) => request('POST', '/api/ai/review', data),
+    translate: (data) => request('POST', '/api/ai/translate', data),
   };
 
   // ── Import Word ──────────────────────────────────────────────────────────

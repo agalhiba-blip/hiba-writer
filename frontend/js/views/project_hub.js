@@ -2,6 +2,34 @@
  * project_hub.js — Vue d'accueil d'un projet (hub centralisé)
  */
 const ProjectHubView = (() => {
+
+  // ── Cache localStorage ───────────────────────────────────────────────────
+  function cacheProject(project) {
+    try {
+      localStorage.setItem(`hiba-project-${project.id}`, JSON.stringify(project));
+      // Mettre à jour la liste des projets en cache
+      const list = getCachedProjectList();
+      const idx = list.findIndex(p => p.id === project.id);
+      if (idx >= 0) list[idx] = project; else list.push(project);
+      localStorage.setItem('hiba-projects-list', JSON.stringify(list));
+    } catch {}
+  }
+
+  function getCachedProject(id) {
+    try {
+      const raw = localStorage.getItem(`hiba-project-${id}`);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  }
+
+  function getCachedProjectList() {
+    try {
+      const raw = localStorage.getItem('hiba-projects-list');
+      return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+  }
+
+  // ── Render principal ─────────────────────────────────────────────────────
   async function render(projectId) {
     const view = document.getElementById('view');
     const topbar = document.getElementById('topbar');
@@ -10,9 +38,29 @@ const ProjectHubView = (() => {
     try {
       project = State.project || await API.projects.get(projectId);
       State.setProject(project);
+      cacheProject(project); // Sauvegarder en cache à chaque chargement réussi
     } catch (err) {
-      view.innerHTML = `<p class="text-muted" style="padding:32px">Erreur : ${err.message}</p>`;
-      return;
+      // Essayer de récupérer depuis le cache localStorage
+      const cached = getCachedProject(projectId);
+      if (cached) {
+        project = cached;
+        State.setProject(project);
+        Toast.info('Données chargées depuis le cache local (serveur indisponible)');
+      } else {
+        view.innerHTML = `
+          <div style="padding:48px;text-align:center;max-width:500px;margin:0 auto;">
+            <i class="fa-solid fa-book-skull" style="font-size:48px;opacity:0.3;margin-bottom:16px;display:block"></i>
+            <h2 style="margin-bottom:8px">Roman introuvable</h2>
+            <p class="text-muted" style="margin-bottom:24px;line-height:1.7">
+              Ce roman n'existe pas ou a été supprimé. Les données sur Vercel sont temporaires —
+              pensez à configurer une base de données permanente (DATABASE_URL).
+            </p>
+            <button class="btn btn-primary" onclick="window.location.hash='#/'">
+              <i class="fa-solid fa-arrow-left"></i> Retour à mes romans
+            </button>
+          </div>`;
+        return;
+      }
     }
 
     topbar.innerHTML = `
@@ -22,6 +70,10 @@ const ProjectHubView = (() => {
       <div class="topbar-title">${escHtml(project.title)}</div>
       <div class="topbar-subtitle">${escHtml(project.genre || '')}</div>
       <div class="topbar-actions">
+        <button class="btn btn-secondary btn-sm" onclick="ProjectHubView.openTranslateModal(${projectId})"
+          title="Traduire le roman en anglais, arabe, japonais ou chinois">
+          <i class="fa-solid fa-language"></i> Traduire
+        </button>
         <button class="btn btn-secondary btn-sm" onclick="window._hubExportPdf(${projectId})">
           <i class="fa-solid fa-file-pdf"></i> Export PDF
         </button>
@@ -190,6 +242,117 @@ const ProjectHubView = (() => {
     Sidebar.render();
   }
 
+  // ── Modal Traduction ─────────────────────────────────────────────────────
+  async function openTranslateModal(projectId) {
+    if (!State.aiConfigured) {
+      Toast.error('Configurez votre clé API Claude dans Paramètres pour utiliser la traduction.');
+      return;
+    }
+
+    const project = State.project;
+    let chapters = [];
+    try { chapters = await API.chapters.list(projectId); } catch {}
+
+    const chapterOptions = chapters.map(c =>
+      `<option value="${c.id}">${escHtml(c.title)}</option>`
+    ).join('');
+
+    Modal.open({
+      title: '<i class="fa-solid fa-language"></i> Traduire le roman',
+      body: `
+        <div class="form-group">
+          <label class="form-label">Langue cible</label>
+          <select class="form-control" id="translate-lang">
+            <option value="en">🇬🇧 Anglais</option>
+            <option value="ar">🇸🇦 Arabe</option>
+            <option value="ja">🇯🇵 Japonais</option>
+            <option value="zh">🇨🇳 Chinois (simplifié)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Que traduire ?</label>
+          <select class="form-control" id="translate-what">
+            ${project.synopsis ? '<option value="synopsis">Synopsis seulement</option>' : ''}
+            ${chapterOptions ? `<optgroup label="Chapitres">${chapterOptions}</optgroup>` : ''}
+          </select>
+        </div>
+        <div id="translate-result-area" style="display:none;margin-top:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <label class="form-label" style="margin:0">Traduction</label>
+            <button class="btn btn-sm btn-secondary" onclick="ProjectHubView._copyTranslation()">
+              <i class="fa-solid fa-copy"></i> Copier
+            </button>
+          </div>
+          <textarea id="translate-result-text" class="form-control" rows="10" readonly
+            style="font-size:13px;line-height:1.7;resize:vertical"></textarea>
+        </div>
+        <div id="translate-loading" style="display:none;text-align:center;padding:24px;color:var(--text-muted)">
+          <i class="fa-solid fa-spinner fa-spin" style="font-size:24px;margin-bottom:8px;display:block"></i>
+          Traduction en cours...
+        </div>
+      `,
+      confirmText: '<i class="fa-solid fa-language"></i> Traduire',
+      cancelText: 'Fermer',
+      async onConfirm() {
+        const lang = document.getElementById('translate-lang')?.value;
+        const what = document.getElementById('translate-what')?.value;
+        const loadingEl = document.getElementById('translate-loading');
+        const resultArea = document.getElementById('translate-result-area');
+        const resultText = document.getElementById('translate-result-text');
+
+        if (!lang || !what) { Toast.error('Sélectionnez une langue et un contenu'); return false; }
+
+        let textToTranslate = '';
+        let chapterId = null;
+
+        if (what === 'synopsis') {
+          textToTranslate = project.synopsis || '';
+        } else {
+          const chId = parseInt(what);
+          chapterId = chId;
+          try {
+            const ch = await API.chapters.get(chId);
+            // Enlever les balises HTML pour un texte propre
+            const tmp = document.createElement('div');
+            tmp.innerHTML = ch.content || '';
+            textToTranslate = tmp.innerText;
+          } catch (e) {
+            Toast.error('Impossible de charger le chapitre'); return false;
+          }
+        }
+
+        if (!textToTranslate.trim()) { Toast.error('Aucun contenu à traduire'); return false; }
+
+        if (loadingEl) loadingEl.style.display = 'block';
+        if (resultArea) resultArea.style.display = 'none';
+
+        try {
+          const res = await API.ai.translate({
+            text: textToTranslate,
+            language: lang,
+            project_id: projectId,
+            chapter_id: chapterId,
+          });
+          if (resultText) resultText.value = res.result;
+          if (resultArea) resultArea.style.display = 'block';
+        } catch (err) {
+          Toast.error('Erreur traduction : ' + err.message);
+        } finally {
+          if (loadingEl) loadingEl.style.display = 'none';
+        }
+        return false; // Garder le modal ouvert pour afficher le résultat
+      },
+    });
+  }
+
+  function _copyTranslation() {
+    const text = document.getElementById('translate-result-text')?.value;
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => Toast.success('Copié dans le presse-papiers !'))
+      .catch(() => Toast.error('Impossible de copier'));
+  }
+
+  // ── Edit project ─────────────────────────────────────────────────────────
   async function editProject(projectId) {
     const project = State.project;
     if (!project) return;
@@ -231,6 +394,7 @@ const ProjectHubView = (() => {
         try {
           const updated = await API.projects.update(project.id, data);
           State.setProject(updated);
+          cacheProject(updated);
           Modal.close();
           Toast.success('Roman mis à jour !');
           render(projectId);
@@ -251,6 +415,12 @@ const ProjectHubView = (() => {
       async onConfirm() {
         try {
           await API.projects.delete(project.id);
+          // Supprimer du cache local
+          try {
+            localStorage.removeItem(`hiba-project-${project.id}`);
+            const list = getCachedProjectList().filter(p => p.id !== project.id);
+            localStorage.setItem('hiba-projects-list', JSON.stringify(list));
+          } catch {}
           State.setProject(null);
           Modal.close();
           Toast.success('Roman supprimé.');
@@ -266,7 +436,7 @@ const ProjectHubView = (() => {
     return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
-  return { render, editProject, confirmDeleteProject };
+  return { render, editProject, confirmDeleteProject, openTranslateModal, _copyTranslation };
 })();
 
 // Helper pour export PDF depuis le hub (défini après chargement de tous les scripts)
