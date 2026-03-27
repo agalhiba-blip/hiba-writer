@@ -1,5 +1,7 @@
 import anthropic
 import httpx
+import json
+from typing import AsyncIterator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from backend.models import Setting, AIHistory
@@ -27,14 +29,15 @@ async def get_api_config(db: AsyncSession) -> tuple[str, str]:
     return api_key, model
 
 
-async def call_openrouter(prompt: str, system: str, api_key: str, model: str) -> str:
-    """Appelle l'API OpenRouter (compatible OpenAI) et retourne la réponse."""
-    # Convertir le nom du modèle si nécessaire
+def _openrouter_model(model: str) -> str:
     or_model = OPENROUTER_MODEL_MAP.get(model, model)
-    # Si le modèle n'a pas de préfixe fournisseur, l'ajouter automatiquement
     if "/" not in or_model:
         or_model = f"anthropic/{or_model}"
+    return or_model
 
+
+async def call_openrouter(prompt: str, system: str, api_key: str, model: str) -> str:
+    """Appelle l'API OpenRouter (compatible OpenAI) et retourne la réponse."""
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(
             "https://openrouter.ai/api/v1/chat/completions",
@@ -45,7 +48,7 @@ async def call_openrouter(prompt: str, system: str, api_key: str, model: str) ->
                 "X-Title": "HIBA-WRITER",
             },
             json={
-                "model": or_model,
+                "model": _openrouter_model(model),
                 "max_tokens": 2048,
                 "messages": [
                     {"role": "system", "content": system},
@@ -54,8 +57,68 @@ async def call_openrouter(prompt: str, system: str, api_key: str, model: str) ->
             },
         )
         response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"]
+        return response.json()["choices"][0]["message"]["content"]
+
+
+async def stream_anthropic(prompt: str, system: str, api_key: str, model: str, max_tokens: int = 2048) -> AsyncIterator[str]:
+    """Stream depuis l'API Anthropic — génère les chunks de texte au fur et à mesure."""
+    client = anthropic.Anthropic(api_key=api_key)
+    with client.messages.stream(
+        model=model,
+        max_tokens=max_tokens,
+        system=system,
+        messages=[{"role": "user", "content": prompt}],
+    ) as stream:
+        for text in stream.text_stream:
+            yield text
+
+
+async def stream_openrouter(prompt: str, system: str, api_key: str, model: str, max_tokens: int = 2048) -> AsyncIterator[str]:
+    """Stream depuis l'API OpenRouter (SSE)."""
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        async with client.stream(
+            "POST",
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://hiba-writer.vercel.app",
+                "X-Title": "HIBA-WRITER",
+            },
+            json={
+                "model": _openrouter_model(model),
+                "max_tokens": max_tokens,
+                "stream": True,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
+                ],
+            },
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                    text = chunk["choices"][0]["delta"].get("content", "")
+                    if text:
+                        yield text
+                except Exception:
+                    continue
+
+
+async def stream_claude(prompt: str, system: str, api_key: str, model: str, max_tokens: int = 2048) -> AsyncIterator[str]:
+    """Route vers Anthropic ou OpenRouter en mode streaming."""
+    if is_openrouter_key(api_key):
+        async for chunk in stream_openrouter(prompt, system, api_key, model, max_tokens):
+            yield chunk
+    else:
+        async for chunk in stream_anthropic(prompt, system, api_key, model, max_tokens):
+            yield chunk
 
 
 async def call_claude(prompt: str, system: str, api_key: str, model: str) -> str:

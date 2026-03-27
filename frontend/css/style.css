@@ -1450,6 +1450,11 @@ select.form-control {
   to { opacity: 1; transform: translateX(0); }
 }
 
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
+}
+
 /* ── Utilitaires ──────────────────────────────────────────────────────────── */
 .flex { display: flex; }
 .flex-1 { flex: 1; }

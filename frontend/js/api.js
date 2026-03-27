@@ -98,6 +98,7 @@ const API = (() => {
     continue: (data) => request('POST', '/api/ai/continue', data),
     review: (data) => request('POST', '/api/ai/review', data),
     translate: (data) => request('POST', '/api/ai/translate', data),
+    stream: (action, data, onChunk, onDone, onError) => streamRequest(action, data, onChunk, onDone, onError),
   };
 
   // ── Import Word ──────────────────────────────────────────────────────────
@@ -137,6 +138,51 @@ const API = (() => {
     generateMarkdown: (id) => exportBinary('/api/export/markdown',  id),
     generateTxt:      (id) => exportBinary('/api/export/txt',       id),
   };
+
+  // ── Streaming SSE ─────────────────────────────────────────────────────────
+  async function streamRequest(action, data, onChunk, onDone, onError) {
+    const headers = { 'Content-Type': 'application/json' };
+    const key = getLocalApiKey();
+    if (key) {
+      headers['X-API-Key']  = key;
+      headers['X-AI-Model'] = getLocalModel();
+    }
+    try {
+      const res = await fetch(`/api/ai/stream?action=${encodeURIComponent(action)}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: `Erreur ${res.status}` }));
+        onError(err.detail || `Erreur ${res.status}`);
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6);
+          if (raw === '[DONE]') { onDone(); return; }
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed.error) { onError(parsed.error); return; }
+            onChunk(parsed);
+          } catch {}
+        }
+      }
+      onDone();
+    } catch (err) {
+      onError(err.message);
+    }
+  }
 
   return { projects, chapters, characters, locations, notes, ai, export: exportApi, importWord };
 })();

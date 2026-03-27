@@ -140,13 +140,6 @@ const AIPanel = (() => {
   }
 
   async function _executeAI(action, text, context, resultDiv) {
-    resultDiv.innerHTML = `
-      <div class="ai-loading">
-        <div class="spinner"></div>
-        <span>Claude analyse votre texte...</span>
-      </div>
-    `;
-
     const labels = {
       review: 'Relecture complète',
       improve: 'Style amélioré',
@@ -155,36 +148,51 @@ const AIPanel = (() => {
       summarize: 'Résumé',
     };
 
-    try {
-      const payload = { text, context, project_id: _currentProjectId, chapter_id: _currentChapterId };
-      const fnMap = {
-        review: API.ai.review,
-        improve: API.ai.improve,
-        proofread: API.ai.proofread,
-        summarize: API.ai.summarize,
-        continue: API.ai.continue,
-      };
-
-      const res = await fnMap[action](payload);
-      resultDiv.innerHTML = `
-        <div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">
-          <span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">
-            ${labels[action] || action}
+    // Afficher le header du résultat immédiatement avec zone de texte vide
+    resultDiv.innerHTML = `
+      <div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">
+          ${labels[action] || action}
+          <span id="ai-stream-indicator" style="margin-left:6px;color:var(--accent)">
+            <i class="fa-solid fa-circle" style="font-size:7px;animation:pulse 1s infinite"></i>
           </span>
-          <button class="btn btn-sm btn-secondary" onclick="AIPanel.copyResult()">
-            <i class="fa-regular fa-copy"></i> Copier
-          </button>
-        </div>
-        <div class="ai-result-text">${escapeHtml(res.result)}</div>
-      `;
-    } catch (err) {
-      resultDiv.innerHTML = `
-        <div style="color:#aa4a4a;font-size:13px;padding:8px;display:flex;align-items:center;gap:8px">
-          <i class="fa-solid fa-circle-exclamation"></i>
-          ${err.message}
-        </div>
-      `;
-    }
+        </span>
+        <button class="btn btn-sm btn-secondary" onclick="AIPanel.copyResult()">
+          <i class="fa-regular fa-copy"></i> Copier
+        </button>
+      </div>
+      <div class="ai-result-text" id="ai-stream-text" style="white-space:pre-wrap;min-height:40px"></div>
+    `;
+
+    const textEl = document.getElementById('ai-stream-text');
+    const indicator = document.getElementById('ai-stream-indicator');
+    let accumulated = '';
+
+    const payload = { text, context, project_id: _currentProjectId, chapter_id: _currentChapterId };
+
+    API.ai.stream(
+      action,
+      payload,
+      // onChunk — ajouter chaque token au fur et à mesure
+      (chunk) => {
+        accumulated += chunk;
+        if (textEl) textEl.textContent = accumulated;
+      },
+      // onDone
+      () => {
+        if (indicator) indicator.remove();
+      },
+      // onError
+      (errMsg) => {
+        if (indicator) indicator.remove();
+        resultDiv.innerHTML = `
+          <div style="color:#aa4a4a;font-size:13px;padding:8px;display:flex;align-items:center;gap:8px">
+            <i class="fa-solid fa-circle-exclamation"></i>
+            ${errMsg}
+          </div>
+        `;
+      }
+    );
   }
 
   function copyResult() {
