@@ -90,11 +90,12 @@ const API = (() => {
 
   // ── Import Word ──────────────────────────────────────────────────────────
   const importWord = {
-    upload: (file, projectId, mode = 'auto') => {
+    upload: (file, projectId, mode = 'auto', projectTitle = '') => {
       const fd = new FormData();
       fd.append('file', file);
-      fd.append('project_id', String(projectId));
+      fd.append('project_id', String(projectId || 0));
       fd.append('mode', mode);
+      fd.append('project_title', projectTitle);
       return request('POST', '/api/import/word', fd, true);
     },
   };

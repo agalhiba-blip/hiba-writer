@@ -183,22 +183,27 @@ const DashboardView = (() => {
         const projectTitle = title || file.name.replace(/\.\w+$/, '');
 
         Modal.close();
-        Toast.info('Création du roman en cours...');
+        Toast.info('Import en cours...');
 
         try {
-          // Créer le projet
-          const project = await API.projects.create({ title: projectTitle });
-          State.setProject(project);
-
-          // Importer le fichier
           if (file.name.toLowerCase().endsWith('.txt')) {
+            // TXT : créer le projet puis importer (tout en JS, pas de serveur)
+            const project = await API.projects.create({ title: projectTitle });
+            State.setProject(project);
             await importTxt(file, project.id);
+            Toast.success('Import terminé !');
+            window.location.hash = `#/project/${project.id}/hub`;
           } else {
-            await importWordFile(file, project.id, mode);
+            // DOCX : tout en une seule requête serveur (projet + chapitres)
+            const result = await importWordFile(file, 0, mode, projectTitle);
+            const projectId = result?.project_id;
+            if (!projectId) throw new Error('Réponse invalide du serveur');
+            // Charger le projet créé et naviguer
+            const project = await API.projects.get(projectId);
+            State.setProject(project);
+            Toast.success(`Import terminé ! ${result.created} chapitre(s) importé(s)`);
+            window.location.hash = `#/project/${projectId}/hub`;
           }
-
-          Toast.success('Import terminé !');
-          window.location.hash = `#/project/${project.id}/hub`;
         } catch (err) {
           Toast.error('Erreur : ' + err.message);
         }
@@ -264,21 +269,25 @@ const DashboardView = (() => {
     }
   }
 
-  async function importWordFile(file, projectId, mode) {
+  async function importWordFile(file, projectId, mode, projectTitle = '') {
     try {
-      const res = await API.importWord.upload(file, projectId, mode);
+      const res = await API.importWord.upload(file, projectId, mode, projectTitle);
       return res;
-    } catch {
-      // Fallback mammoth.js
+    } catch (serverErr) {
+      // Fallback mammoth.js si le serveur échoue
+      Toast.info('Import serveur échoué, utilisation du navigateur...');
       await loadMammoth();
       const arrayBuffer = await file.arrayBuffer();
       const result = await mammoth.convertToHtml({ arrayBuffer });
       const html = result.value;
+      // Créer le projet d'abord pour le fallback navigateur
+      const project = await API.projects.create({ title: projectTitle || file.name.replace(/\.\w+$/, '') });
       if (mode === 'single') {
-        await API.chapters.create({ project_id: projectId, title: file.name.replace(/\.\w+$/, ''), content: html });
+        await API.chapters.create({ project_id: project.id, title: file.name.replace(/\.\w+$/, ''), content: html });
       } else {
-        await splitDocIntoChapters(html, projectId);
+        await splitDocIntoChapters(html, project.id);
       }
+      return { project_id: project.id, created: 1, chapters: [] };
     }
   }
 
