@@ -1,7 +1,19 @@
 import anthropic
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from backend.models import Setting, AIHistory
+
+# Modèles OpenRouter correspondant aux modèles Anthropic natifs
+OPENROUTER_MODEL_MAP = {
+    "claude-haiku-4-5-20251001": "anthropic/claude-3-5-haiku",
+    "claude-sonnet-4-6":         "anthropic/claude-sonnet-4-5",
+    "claude-opus-4-6":           "anthropic/claude-3-opus",
+}
+
+
+def is_openrouter_key(api_key: str) -> bool:
+    return api_key.startswith("sk-or-")
 
 
 async def get_api_config(db: AsyncSession) -> tuple[str, str]:
@@ -15,8 +27,42 @@ async def get_api_config(db: AsyncSession) -> tuple[str, str]:
     return api_key, model
 
 
+async def call_openrouter(prompt: str, system: str, api_key: str, model: str) -> str:
+    """Appelle l'API OpenRouter (compatible OpenAI) et retourne la réponse."""
+    # Convertir le nom du modèle si nécessaire
+    or_model = OPENROUTER_MODEL_MAP.get(model, model)
+    # Si le modèle n'a pas de préfixe fournisseur, l'ajouter automatiquement
+    if "/" not in or_model:
+        or_model = f"anthropic/{or_model}"
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://hiba-writer.vercel.app",
+                "X-Title": "HIBA-WRITER",
+            },
+            json={
+                "model": or_model,
+                "max_tokens": 2048,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
+                ],
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
+
+
 async def call_claude(prompt: str, system: str, api_key: str, model: str) -> str:
-    """Appelle l'API Claude et retourne la réponse."""
+    """Appelle Claude via Anthropic ou OpenRouter selon la clé fournie."""
+    if is_openrouter_key(api_key):
+        return await call_openrouter(prompt, system, api_key, model)
+    # Clé Anthropic native
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
         model=model,
