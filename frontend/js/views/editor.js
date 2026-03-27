@@ -8,7 +8,7 @@ const EditorView = (() => {
   let _autosaveTimer = null;
   let _isDirty = false;
   let _isSaving = false;
-  let _autosaveInterval = 30000;
+  let _autosaveInterval = 10000; // 10 secondes
   let _spellcheck = true;
   let _focusMode = false;
   let _originalContent = null;   // Contenu avant suggestion IA
@@ -29,10 +29,15 @@ const EditorView = (() => {
     } catch {
       // Projet introuvable sur le serveur → essayer le cache
       try {
-        const raw = localStorage.getItem('hiba-projects');
-        if (raw) {
-          const list = JSON.parse(raw);
-          _project = list.find(p => p.id == projectId) || null;
+        const raw = localStorage.getItem(`hiba-project-${projectId}`);
+        _project = raw ? JSON.parse(raw) : null;
+        if (!_project) {
+          // Essayer aussi la liste complète
+          const listRaw = localStorage.getItem('hiba-projects-list');
+          if (listRaw) {
+            const list = JSON.parse(listRaw);
+            _project = list.find(p => p.id == projectId) || null;
+          }
         }
       } catch {}
       if (!_project) {
@@ -46,14 +51,19 @@ const EditorView = (() => {
       _chapter = await API.chapters.get(chapterId);
       State.setChapter(_chapter);
     } catch {
-      // Chapitre introuvable sur le serveur → essayer le cache
+      // Chapitre introuvable sur le serveur → chercher dans le cache par ID puis par titre
       try {
         const listRaw = localStorage.getItem(`hiba-chapters-${projectId}`);
         if (listRaw) {
           const list = JSON.parse(listRaw);
-          const cached = list.find(c => c.id == chapterId);
+          // Chercher par ID exact
+          let cached = list.find(c => c.id == chapterId);
+          // Si pas trouvé par ID, prendre le premier chapitre disponible
+          if (!cached && list.length > 0) cached = list[0];
           if (cached) {
-            const contentRaw = localStorage.getItem(`hiba-chapter-${chapterId}`);
+            // Contenu : chercher d'abord par l'ID exact de la liste, puis par chapterId original
+            let contentRaw = localStorage.getItem(`hiba-chapter-${cached.id}`)
+                          || localStorage.getItem(`hiba-chapter-${chapterId}`);
             const content = contentRaw ? (JSON.parse(contentRaw).content || '') : '';
             _chapter = { ...cached, content };
             State.setChapter(_chapter);

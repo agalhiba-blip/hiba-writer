@@ -51,34 +51,34 @@ const ChaptersListView = (() => {
     // Fermer le menu export si clic ailleurs
     document.addEventListener('click', _closeExportMenuOutside);
 
-    view.innerHTML = '<div class="chapters-view"><p class="text-muted">Chargement...</p></div>';
+    // 1. Afficher immédiatement depuis le cache localStorage (pas d'attente serveur)
+    const cached = _loadCachedChapters(projectId);
+    if (cached.length > 0) {
+      _chapters = cached;
+      renderList();
+    } else {
+      view.innerHTML = '<div class="chapters-view"><p class="text-muted">Chargement...</p></div>';
+    }
 
+    // 2. Synchroniser avec le serveur en arrière-plan
     try {
-      _chapters = await API.chapters.list(projectId);
+      const serverChapters = await API.chapters.list(projectId);
 
-      if (_chapters.length > 0) {
-        // Serveur OK → mettre en cache
-        _saveChaptersCache(projectId, _chapters);
+      if (serverChapters.length > 0) {
+        // Serveur OK → mettre en cache et afficher
+        _saveChaptersCache(projectId, serverChapters);
+        _chapters = serverChapters;
         renderList();
-      } else {
-        // Serveur vide → Vercel a peut-être réinitialisé la DB
-        const cached = _loadCachedChapters(projectId);
-        if (cached.length > 0) {
-          Toast.info('Serveur vide — restauration depuis la sauvegarde locale en cours...');
-          _chapters = await _resyncChaptersToServer(projectId, cached);
-          renderList();
-        } else {
-          renderList(); // Vraiment vide
-        }
+      } else if (cached.length > 0) {
+        // Serveur vide mais cache non vide → resync silencieuse
+        _resyncChaptersToServer(projectId, cached); // fire and forget (pas await)
       }
-    } catch (err) {
-      const cached = _loadCachedChapters(projectId);
-      if (cached.length > 0) {
-        Toast.info('Serveur indisponible — chapitres chargés depuis la sauvegarde locale');
-        _chapters = cached;
-        renderList();
-      } else {
-        view.innerHTML = `<div class="chapters-view"><p class="text-muted">Erreur : ${err.message}</p></div>`;
+      // Si les deux sont vides → laisser tel quel (renderList déjà appelé ou pas de chapitres)
+      if (serverChapters.length === 0 && cached.length === 0) renderList();
+    } catch {
+      // Serveur indisponible → on reste sur le cache (déjà affiché)
+      if (cached.length === 0) {
+        view.innerHTML = '<div class="chapters-view"><p class="text-muted">Aucun chapitre pour le moment.</p></div>';
       }
     }
   }
@@ -750,13 +750,37 @@ const ChaptersListView = (() => {
     const sorted = [...cachedChapters].sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
     const newChapters = [];
 
+    // 1. S'assurer que le projet existe sur le serveur — le recréer si nécessaire
+    let serverProjectId = parseInt(projectId);
+    try {
+      await API.projects.get(serverProjectId);
+    } catch {
+      // Projet disparu → le recréer depuis le cache
+      try {
+        const projRaw = localStorage.getItem(`hiba-project-${projectId}`);
+        const proj = projRaw ? JSON.parse(projRaw) : { title: 'Mon roman', genre: '' };
+        const newProj = await API.projects.create({
+          title: proj.title || 'Mon roman',
+          genre: proj.genre || '',
+          synopsis: proj.synopsis || '',
+          word_goal: proj.word_goal || 0,
+        });
+        serverProjectId = newProj.id;
+        // Mettre à jour le cache projet avec le nouvel ID
+        localStorage.setItem(`hiba-project-${newProj.id}`, JSON.stringify({ ...proj, id: newProj.id }));
+      } catch {
+        // Impossible de recréer le projet → abandon, NE PAS toucher au cache
+        return cachedChapters;
+      }
+    }
+
+    // 2. Créer les chapitres sous le bon projet
     for (let i = 0; i < sorted.length; i++) {
       const ch = sorted[i];
-      // Récupérer le contenu depuis localStorage (sauvegardé par l'éditeur ou l'import)
       const content = _getChapterContent(ch.id) || ch.content || '';
       try {
         const newCh = await API.chapters.create({
-          project_id: parseInt(projectId),
+          project_id: serverProjectId,
           title: ch.title,
           content,
           status: ch.status || 'brouillon',
@@ -764,15 +788,21 @@ const ChaptersListView = (() => {
           pov: ch.pov || '',
           order_index: i,
         });
-        // Mettre à jour le contenu avec le nouvel ID
         if (content) _cacheChapterContent(newCh.id, content);
         newChapters.push(newCh);
       } catch {}
     }
 
-    _saveChaptersCache(projectId, newChapters);
-    Toast.success(`${newChapters.length} chapitre(s) re-synchronisé(s) avec le serveur`);
-    return newChapters;
+    // 3. Ne mettre à jour le cache QUE si au moins un chapitre a été créé
+    if (newChapters.length > 0) {
+      _saveChaptersCache(projectId, newChapters);
+      // Si le projet a un nouvel ID, mettre à jour aussi ce cache
+      if (serverProjectId !== parseInt(projectId)) {
+        _saveChaptersCache(serverProjectId, newChapters);
+      }
+    }
+
+    return newChapters.length > 0 ? newChapters : cachedChapters;
   }
 
   function escHtml(s) {
