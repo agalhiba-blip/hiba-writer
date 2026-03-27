@@ -26,11 +26,45 @@ const EditorView = (() => {
     try {
       _project = State.project || await API.projects.get(projectId);
       State.setProject(_project);
+    } catch {
+      // Projet introuvable sur le serveur → essayer le cache
+      try {
+        const raw = localStorage.getItem('hiba-projects');
+        if (raw) {
+          const list = JSON.parse(raw);
+          _project = list.find(p => p.id == projectId) || null;
+        }
+      } catch {}
+      if (!_project) {
+        view.innerHTML = `<p class="text-muted" style="padding:32px">Roman introuvable.</p>`;
+        return;
+      }
+      State.setProject(_project);
+    }
+
+    try {
       _chapter = await API.chapters.get(chapterId);
       State.setChapter(_chapter);
-    } catch (err) {
-      view.innerHTML = `<p class="text-muted" style="padding:32px">Erreur : ${err.message}</p>`;
-      return;
+    } catch {
+      // Chapitre introuvable sur le serveur → essayer le cache
+      try {
+        const listRaw = localStorage.getItem(`hiba-chapters-${projectId}`);
+        if (listRaw) {
+          const list = JSON.parse(listRaw);
+          const cached = list.find(c => c.id == chapterId);
+          if (cached) {
+            const contentRaw = localStorage.getItem(`hiba-chapter-${chapterId}`);
+            const content = contentRaw ? (JSON.parse(contentRaw).content || '') : '';
+            _chapter = { ...cached, content };
+            State.setChapter(_chapter);
+            Toast.info('Contenu chargé depuis la sauvegarde locale');
+          }
+        }
+      } catch {}
+      if (!_chapter) {
+        view.innerHTML = `<p class="text-muted" style="padding:32px">Chapitre introuvable.</p>`;
+        return;
+      }
     }
 
     try {
@@ -389,8 +423,20 @@ const EditorView = (() => {
       _isDirty = false;
       setSaveStatus('saved');
     } catch (err) {
-      Toast.error('Erreur serveur — contenu sauvegardé localement');
-      setSaveStatus('unsaved');
+      // 404 = Vercel a réinitialisé la DB → recréer projet + chapitre
+      if (err.message && (err.message.includes('404') || err.message.toLowerCase().includes('introuvable'))) {
+        try {
+          await _resyncToServer(content);
+          _isDirty = false;
+          setSaveStatus('saved');
+        } catch (resyncErr) {
+          Toast.error('Erreur serveur — contenu sauvegardé localement');
+          setSaveStatus('unsaved');
+        }
+      } else {
+        Toast.error('Erreur serveur — contenu sauvegardé localement');
+        setSaveStatus('unsaved');
+      }
     } finally { _isSaving = false; }
   }
 
@@ -566,6 +612,75 @@ const EditorView = (() => {
     }
     _quill = null; _chapter = null; _focusMode = false;
     _originalContent = null; _suggestionActive = false;
+  }
+
+  // Recrée le projet + chapitre sur le serveur après un reset Vercel
+  async function _resyncToServer(content) {
+    // 1. Vérifier si le projet existe encore
+    let projectId = _project.id;
+    try {
+      await API.projects.get(projectId);
+    } catch {
+      // Projet disparu → le recréer
+      const newProject = await API.projects.create({
+        title: _project.title,
+        genre: _project.genre || '',
+        synopsis: _project.synopsis || '',
+      });
+      projectId = newProject.id;
+      _project = { ..._project, id: projectId };
+      State.setProject(_project);
+      // Mettre à jour le cache projets
+      try {
+        const raw = localStorage.getItem('hiba-projects');
+        if (raw) {
+          const list = JSON.parse(raw);
+          const idx = list.findIndex(p => p.id == _project.id);
+          if (idx >= 0) list[idx] = _project; else list.unshift(_project);
+          localStorage.setItem('hiba-projects', JSON.stringify(list));
+        }
+      } catch {}
+    }
+
+    // 2. Recréer le chapitre avec son contenu
+    const newChapter = await API.chapters.create({
+      project_id: projectId,
+      title: _chapter.title,
+      content,
+      status: _chapter.status || 'brouillon',
+      summary: _chapter.summary || '',
+      pov: _chapter.pov || '',
+      order_index: _chapter.order_index || 0,
+    });
+
+    // 3. Mettre à jour l'ID local et les caches
+    const oldId = _chapter.id;
+    _chapter = { ..._chapter, id: newChapter.id, project_id: projectId };
+    State.setChapter(_chapter);
+
+    localStorage.setItem(`hiba-chapter-${newChapter.id}`, JSON.stringify({
+      content, title: _chapter.title, savedAt: new Date().toISOString()
+    }));
+    try { localStorage.removeItem(`hiba-chapter-${oldId}`); } catch {}
+
+    // Mettre à jour la liste des chapitres en cache
+    try {
+      const listKey = `hiba-chapters-${projectId}`;
+      const raw = localStorage.getItem(`hiba-chapters-${_project.id}`) || localStorage.getItem(listKey);
+      if (raw) {
+        const list = JSON.parse(raw);
+        const idx = list.findIndex(c => c.id == oldId);
+        if (idx >= 0) list[idx] = { ...list[idx], id: newChapter.id, project_id: projectId };
+        localStorage.setItem(listKey, JSON.stringify(list));
+      }
+    } catch {}
+
+    // Mettre à jour l'URL sans recharger
+    const newHash = `#/project/${projectId}/chapter/${newChapter.id}`;
+    if (window.location.hash !== newHash) {
+      history.replaceState(null, '', newHash);
+    }
+    Toast.success('Reconnecté au serveur — sauvegarde effectuée');
   }
 
   function escHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
