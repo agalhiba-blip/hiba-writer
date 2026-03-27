@@ -2,10 +2,16 @@
  * app.js — Routeur SPA hash-based
  */
 (async () => {
-  try {
-    const status = await API.ai.status();
-    State.setAiConfigured(status.configured);
-  } catch {}
+  // Vérifier d'abord le localStorage (résistant aux resets Vercel)
+  const localKey = localStorage.getItem('hiba-api-key');
+  if (localKey) {
+    State.setAiConfigured(true);
+  } else {
+    try {
+      const status = await API.ai.status();
+      State.setAiConfigured(status.configured);
+    } catch {}
+  }
 
   function route() {
     const hash = window.location.hash || '#/';

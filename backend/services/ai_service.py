@@ -73,8 +73,10 @@ async def call_claude(prompt: str, system: str, api_key: str, model: str) -> str
     return message.content[0].text
 
 
-async def improve_text(text: str, context: str, db: AsyncSession, project_id: int = None, chapter_id: int = None) -> str:
-    api_key, model = await get_api_config(db)
+async def improve_text(text: str, context: str, db: AsyncSession, project_id: int = None, chapter_id: int = None, api_key: str = None, model: str = None) -> str:
+    if not api_key:
+        api_key, model = await get_api_config(db)
+    model = model or "claude-sonnet-4-6"
     system = (
         "Tu es un assistant de rédaction littéraire expert en français. "
         "Améliore le style, le rythme et la fluidité du texte proposé, "
@@ -88,8 +90,10 @@ async def improve_text(text: str, context: str, db: AsyncSession, project_id: in
     return result
 
 
-async def proofread_text(text: str, context: str, db: AsyncSession, project_id: int = None, chapter_id: int = None) -> str:
-    api_key, model = await get_api_config(db)
+async def proofread_text(text: str, context: str, db: AsyncSession, project_id: int = None, chapter_id: int = None, api_key: str = None, model: str = None) -> str:
+    if not api_key:
+        api_key, model = await get_api_config(db)
+    model = model or "claude-sonnet-4-6"
     system = (
         "Tu es un correcteur littéraire expert en français. "
         "Corrige les fautes d'orthographe, de grammaire, de syntaxe et de ponctuation. "
@@ -101,8 +105,10 @@ async def proofread_text(text: str, context: str, db: AsyncSession, project_id: 
     return result
 
 
-async def summarize_text(text: str, context: str, db: AsyncSession, project_id: int = None, chapter_id: int = None) -> str:
-    api_key, model = await get_api_config(db)
+async def summarize_text(text: str, context: str, db: AsyncSession, project_id: int = None, chapter_id: int = None, api_key: str = None, model: str = None) -> str:
+    if not api_key:
+        api_key, model = await get_api_config(db)
+    model = model or "claude-sonnet-4-6"
     system = (
         "Tu es un assistant littéraire. Résume le passage fourni en 2-3 phrases claires, "
         "en identifiant les événements clés, les personnages impliqués et les enjeux."
@@ -113,8 +119,10 @@ async def summarize_text(text: str, context: str, db: AsyncSession, project_id: 
     return result
 
 
-async def continue_text(text: str, context: str, db: AsyncSession, project_id: int = None, chapter_id: int = None) -> str:
-    api_key, model = await get_api_config(db)
+async def continue_text(text: str, context: str, db: AsyncSession, project_id: int = None, chapter_id: int = None, api_key: str = None, model: str = None) -> str:
+    if not api_key:
+        api_key, model = await get_api_config(db)
+    model = model or "claude-sonnet-4-6"
     system = (
         "Tu es un écrivain créatif expert en français. "
         "Propose une continuation naturelle et cohérente du passage fourni, "
@@ -129,9 +137,11 @@ async def continue_text(text: str, context: str, db: AsyncSession, project_id: i
     return result
 
 
-async def review_text(text: str, context: str, db: AsyncSession, project_id: int = None, chapter_id: int = None) -> str:
+async def review_text(text: str, context: str, db: AsyncSession, project_id: int = None, chapter_id: int = None, api_key: str = None, model: str = None) -> str:
     """Relecture complète : syntaxe, cohérence, tournures de phrases."""
-    api_key, model = await get_api_config(db)
+    if not api_key:
+        api_key, model = await get_api_config(db)
+    model = model or "claude-sonnet-4-6"
     system = (
         "Tu es un éditeur littéraire expert en langue française. "
         "Effectue une relecture complète et approfondie du texte fourni en corrigeant : "
@@ -152,9 +162,11 @@ async def review_text(text: str, context: str, db: AsyncSession, project_id: int
     return result
 
 
-async def translate_text(text: str, language: str, db: AsyncSession, project_id: int = None, chapter_id: int = None) -> str:
+async def translate_text(text: str, language: str, db: AsyncSession, project_id: int = None, chapter_id: int = None, api_key: str = None, model: str = None) -> str:
     """Traduit un texte dans la langue cible en préservant le style littéraire."""
-    api_key, model = await get_api_config(db)
+    if not api_key:
+        api_key, model = await get_api_config(db)
+    model = model or "claude-sonnet-4-6"
     lang_names = {
         "en": "anglais",
         "ar": "arabe",

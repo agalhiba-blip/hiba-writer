@@ -4,11 +4,23 @@
 const API = (() => {
   const BASE = '';
 
+  // Clé API stockée localement pour résister aux resets Vercel
+  function getLocalApiKey()   { return localStorage.getItem('hiba-api-key')   || ''; }
+  function getLocalModel()    { return localStorage.getItem('hiba-claude-model') || 'claude-sonnet-4-6'; }
+
   async function request(method, path, body = null, isFormData = false) {
-    const opts = {
-      method,
-      headers: isFormData ? {} : { 'Content-Type': 'application/json' },
-    };
+    const headers = isFormData ? {} : { 'Content-Type': 'application/json' };
+
+    // Toujours joindre la clé API locale aux requêtes IA pour bypasser la DB Vercel
+    if (path.startsWith('/api/ai')) {
+      const key = getLocalApiKey();
+      if (key) {
+        headers['X-API-Key']  = key;
+        headers['X-AI-Model'] = getLocalModel();
+      }
+    }
+
+    const opts = { method, headers };
     if (body !== null) {
       opts.body = isFormData ? body : JSON.stringify(body);
     }

@@ -153,6 +153,10 @@ const SettingsView = (() => {
       return;
     }
     try {
+      // Sauvegarder dans localStorage en premier (persistant même si Vercel reset la DB)
+      localStorage.setItem('hiba-api-key', key);
+      localStorage.setItem('hiba-claude-model', model);
+
       await API.ai.updateConfig({ anthropic_api_key: key, claude_model: model });
       State.setAiConfigured(true);
       const status = document.getElementById('api-status');
