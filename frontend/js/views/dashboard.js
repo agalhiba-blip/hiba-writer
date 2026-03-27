@@ -22,23 +22,31 @@ const DashboardView = (() => {
 
     try {
       const projects = await API.projects.list();
-      // Mettre en cache la liste pour la récupération hors-ligne
-      try { localStorage.setItem('hiba-projects-list', JSON.stringify(projects)); } catch {}
-      renderProjects(projects);
-    } catch (err) {
-      // Tenter de charger depuis le cache local si le serveur est indisponible
-      try {
-        const cached = localStorage.getItem('hiba-projects-list');
-        if (cached) {
-          const projects = JSON.parse(cached);
-          if (projects.length > 0) {
-            Toast.info('Données chargées depuis le cache local');
-            renderProjects(projects);
-            return;
-          }
+
+      if (projects.length > 0) {
+        // Serveur a des données → mettre en cache et afficher
+        try { localStorage.setItem('hiba-projects-list', JSON.stringify(projects)); } catch {}
+        renderProjects(projects);
+      } else {
+        // API répond [] (DB Vercel réinitialisée) → restaurer depuis le cache local
+        const cached = _loadCachedProjects();
+        if (cached.length > 0) {
+          Toast.info('Romans restaurés depuis la sauvegarde locale du navigateur');
+          renderProjects(cached);
+          // Re-synchroniser le serveur silencieusement
+          _resyncToServer(cached);
+        } else {
+          renderProjects([]); // Vraiment vide
         }
-      } catch {}
-      view.innerHTML = `<div class="dashboard"><p class="text-muted">Erreur : ${err.message}</p></div>`;
+      }
+    } catch (err) {
+      const cached = _loadCachedProjects();
+      if (cached.length > 0) {
+        Toast.info('Serveur indisponible — données locales affichées');
+        renderProjects(cached);
+      } else {
+        view.innerHTML = `<div class="dashboard"><p class="text-muted">Erreur : ${err.message}</p></div>`;
+      }
     }
   }
 
@@ -131,6 +139,7 @@ const DashboardView = (() => {
         if (!data.title.trim()) { Toast.error('Le titre est requis'); return; }
         try {
           const project = await API.projects.create(data);
+          _cacheProject(project); // Sauvegarder immédiatement en local
           Modal.close();
           Toast.success('Roman créé !');
           await openProject(project.id);
@@ -200,6 +209,7 @@ const DashboardView = (() => {
             if (!projectId) throw new Error('Réponse invalide du serveur');
             // Charger le projet créé et naviguer
             const project = await API.projects.get(projectId);
+            _cacheProject(project); // Sauvegarder immédiatement en local
             State.setProject(project);
             Toast.success(`Import terminé ! ${result.created} chapitre(s) importé(s)`);
             window.location.hash = `#/project/${projectId}/hub`;
@@ -317,6 +327,45 @@ const DashboardView = (() => {
       s.onload = resolve; s.onerror = () => reject(new Error('Impossible de charger mammoth.js'));
       document.head.appendChild(s);
     });
+  }
+
+  // ── Cache localStorage ────────────────────────────────────────────────────
+
+  function _loadCachedProjects() {
+    try {
+      const raw = localStorage.getItem('hiba-projects-list');
+      return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+  }
+
+  function _cacheProjects(projects) {
+    try { localStorage.setItem('hiba-projects-list', JSON.stringify(projects)); } catch {}
+  }
+
+  function _cacheProject(project) {
+    try {
+      localStorage.setItem(`hiba-project-${project.id}`, JSON.stringify(project));
+      const list = _loadCachedProjects();
+      const idx = list.findIndex(p => p.id === project.id);
+      if (idx >= 0) list[idx] = project; else list.push(project);
+      _cacheProjects(list);
+    } catch {}
+  }
+
+  // Re-synchronise les projets en cache vers le serveur (après reset Vercel)
+  async function _resyncToServer(cachedProjects) {
+    try {
+      for (const p of cachedProjects) {
+        // Recréer le projet sur le serveur avec le même titre/contenu
+        const created = await API.projects.create({
+          title: p.title, subtitle: p.subtitle || '',
+          author: p.author || '', genre: p.genre || '',
+          synopsis: p.synopsis || '', cover_color: p.cover_color || '#727B57',
+        });
+        // Mettre à jour le cache avec le nouvel ID serveur
+        _cacheProject({ ...p, _server_id: created.id });
+      }
+    } catch {} // Silencieux — c'est juste un essai
   }
 
   function formatDate(iso) {

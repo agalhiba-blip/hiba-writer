@@ -55,9 +55,27 @@ const ChaptersListView = (() => {
 
     try {
       _chapters = await API.chapters.list(projectId);
+      // Mettre en cache les chapitres
+      try { localStorage.setItem(`hiba-chapters-${projectId}`, JSON.stringify(_chapters)); } catch {}
+      if (_chapters.length === 0) {
+        // Peut-être un reset Vercel → essayer le cache
+        const cached = _loadCachedChapters(projectId);
+        if (cached.length > 0) {
+          _chapters = cached;
+          Toast.info('Chapitres restaurés depuis la sauvegarde locale');
+        }
+      }
       renderList();
     } catch (err) {
-      view.innerHTML = `<div class="chapters-view"><p class="text-muted">Erreur : ${err.message}</p></div>`;
+      // Fallback cache
+      const cached = _loadCachedChapters(projectId);
+      if (cached.length > 0) {
+        _chapters = cached;
+        Toast.info('Chapitres chargés depuis la sauvegarde locale');
+        renderList();
+      } else {
+        view.innerHTML = `<div class="chapters-view"><p class="text-muted">Erreur : ${err.message}</p></div>`;
+      }
     }
   }
 
@@ -669,6 +687,13 @@ const ChaptersListView = (() => {
       Toast.error('Erreur de réorganisation : ' + err.message);
     }
     _dragSrc = null;
+  }
+
+  function _loadCachedChapters(projectId) {
+    try {
+      const raw = localStorage.getItem(`hiba-chapters-${projectId}`);
+      return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
   }
 
   function escHtml(s) {
