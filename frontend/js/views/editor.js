@@ -371,6 +371,18 @@ const EditorView = (() => {
         title: _chapter.title,
         savedAt: new Date().toISOString(),
       }));
+      // Mettre aussi à jour la liste des chapitres en cache
+      if (_project) {
+        const listKey = `hiba-chapters-${_project.id}`;
+        const raw = localStorage.getItem(listKey);
+        if (raw) {
+          const list = JSON.parse(raw);
+          const idx = list.findIndex(c => c.id === _chapter.id);
+          const words = content.replace(/<[^>]+>/g,' ').split(/\s+/).filter(Boolean).length;
+          if (idx >= 0) { list[idx] = { ...list[idx], content: undefined, word_count: words }; }
+          localStorage.setItem(listKey, JSON.stringify(list));
+        }
+      }
     } catch {}
     try {
       await API.chapters.update(_chapter.id, { content, title: _chapter.title });

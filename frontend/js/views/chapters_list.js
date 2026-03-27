@@ -55,23 +55,27 @@ const ChaptersListView = (() => {
 
     try {
       _chapters = await API.chapters.list(projectId);
-      // Mettre en cache les chapitres
-      try { localStorage.setItem(`hiba-chapters-${projectId}`, JSON.stringify(_chapters)); } catch {}
-      if (_chapters.length === 0) {
-        // Peut-être un reset Vercel → essayer le cache
+
+      if (_chapters.length > 0) {
+        // Serveur OK → mettre en cache
+        _saveChaptersCache(projectId, _chapters);
+        renderList();
+      } else {
+        // Serveur vide → Vercel a peut-être réinitialisé la DB
         const cached = _loadCachedChapters(projectId);
         if (cached.length > 0) {
-          _chapters = cached;
-          Toast.info('Chapitres restaurés depuis la sauvegarde locale');
+          Toast.info('Serveur vide — restauration depuis la sauvegarde locale en cours...');
+          _chapters = await _resyncChaptersToServer(projectId, cached);
+          renderList();
+        } else {
+          renderList(); // Vraiment vide
         }
       }
-      renderList();
     } catch (err) {
-      // Fallback cache
       const cached = _loadCachedChapters(projectId);
       if (cached.length > 0) {
+        Toast.info('Serveur indisponible — chapitres chargés depuis la sauvegarde locale');
         _chapters = cached;
-        Toast.info('Chapitres chargés depuis la sauvegarde locale');
         renderList();
       } else {
         view.innerHTML = `<div class="chapters-view"><p class="text-muted">Erreur : ${err.message}</p></div>`;
@@ -250,6 +254,8 @@ const ChaptersListView = (() => {
             word_goal: parseInt(data.word_goal) || 0,
             pov: data.pov || '',
           });
+          // Cacher immédiatement dans localStorage
+          _addChapterToCache(_projectId, chapter);
           Modal.close();
           Toast.success('Chapitre créé !');
           window.location.hash = `#/project/${_projectId}/chapter/${chapter.id}`;
@@ -264,6 +270,7 @@ const ChaptersListView = (() => {
     try {
       await API.chapters.update(id, { archived: true });
       _chapters = await API.chapters.list(_projectId);
+      _saveChaptersCache(_projectId, _chapters);
       renderList();
       Toast.success('Chapitre archivé.');
     } catch (err) { Toast.error(err.message); }
@@ -559,6 +566,14 @@ const ChaptersListView = (() => {
       const res = await API.importWord.upload(file, _projectId, mode);
       Toast.success(`${res.created} chapitre${res.created !== 1 ? 's' : ''} importé${res.created !== 1 ? 's' : ''} !`);
       _chapters = await API.chapters.list(_projectId);
+      // Charger et cacher le contenu complet de chaque chapitre importé
+      for (const ch of _chapters) {
+        try {
+          const full = await API.chapters.get(ch.id);
+          if (full.content) _cacheChapterContent(full.id, full.content);
+        } catch {}
+      }
+      _saveChaptersCache(_projectId, _chapters);
       renderList();
       return;
     } catch (backendErr) {
@@ -640,11 +655,15 @@ const ChaptersListView = (() => {
 
   async function createChapterFromHtml(title, html) {
     try {
-      await API.chapters.create({
+      const chapter = await API.chapters.create({
         project_id: parseInt(_projectId),
         title,
         content: html,
       });
+      // Sauvegarder le contenu immédiatement (clé par ID ET par titre)
+      _cacheChapterContent(chapter.id, html);
+      _addChapterToCache(_projectId, chapter);
+      return chapter;
     } catch (err) {
       Toast.error(`Erreur lors de la création de "${title}" : ${err.message}`);
     }
@@ -689,11 +708,71 @@ const ChaptersListView = (() => {
     _dragSrc = null;
   }
 
+  // ── Cache localStorage ──────────────────────────────────────────────────
+
   function _loadCachedChapters(projectId) {
     try {
       const raw = localStorage.getItem(`hiba-chapters-${projectId}`);
       return raw ? JSON.parse(raw) : [];
     } catch { return []; }
+  }
+
+  function _saveChaptersCache(projectId, chapters) {
+    try { localStorage.setItem(`hiba-chapters-${projectId}`, JSON.stringify(chapters)); } catch {}
+  }
+
+  function _addChapterToCache(projectId, chapter) {
+    const list = _loadCachedChapters(projectId);
+    const idx = list.findIndex(c => c.id === chapter.id);
+    if (idx >= 0) list[idx] = chapter; else list.push(chapter);
+    _saveChaptersCache(projectId, list);
+  }
+
+  function _cacheChapterContent(chapterId, content) {
+    try {
+      localStorage.setItem(`hiba-chapter-${chapterId}`, JSON.stringify({
+        content, savedAt: new Date().toISOString()
+      }));
+    } catch {}
+  }
+
+  function _getChapterContent(chapterId) {
+    try {
+      const raw = localStorage.getItem(`hiba-chapter-${chapterId}`);
+      if (!raw) return '';
+      const data = JSON.parse(raw);
+      return data.content || data; // Compatibilité ancien format
+    } catch { return ''; }
+  }
+
+  // Re-crée les chapitres sur le serveur depuis le cache local (après reset Vercel)
+  async function _resyncChaptersToServer(projectId, cachedChapters) {
+    const sorted = [...cachedChapters].sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+    const newChapters = [];
+
+    for (let i = 0; i < sorted.length; i++) {
+      const ch = sorted[i];
+      // Récupérer le contenu depuis localStorage (sauvegardé par l'éditeur ou l'import)
+      const content = _getChapterContent(ch.id) || ch.content || '';
+      try {
+        const newCh = await API.chapters.create({
+          project_id: parseInt(projectId),
+          title: ch.title,
+          content,
+          status: ch.status || 'brouillon',
+          summary: ch.summary || '',
+          pov: ch.pov || '',
+          order_index: i,
+        });
+        // Mettre à jour le contenu avec le nouvel ID
+        if (content) _cacheChapterContent(newCh.id, content);
+        newChapters.push(newCh);
+      } catch {}
+    }
+
+    _saveChaptersCache(projectId, newChapters);
+    Toast.success(`${newChapters.length} chapitre(s) re-synchronisé(s) avec le serveur`);
+    return newChapters;
   }
 
   function escHtml(s) {
