@@ -168,6 +168,11 @@ const AIPanel = (() => {
     const indicator = document.getElementById('ai-stream-indicator');
     let accumulated = '';
 
+    // Actions qui peuvent être appliquées directement dans l'éditeur
+    const applyableActions = ['improve', 'proofread', 'continue', 'review'];
+    const canApply = applyableActions.includes(action) &&
+                     typeof EditorView !== 'undefined' && EditorView.applyAISuggestion;
+
     const payload = { text, context, project_id: _currentProjectId, chapter_id: _currentChapterId };
 
     API.ai.stream(
@@ -178,9 +183,28 @@ const AIPanel = (() => {
         accumulated += chunk;
         if (textEl) textEl.textContent = accumulated;
       },
-      // onDone
+      // onDone — afficher le bouton "Appliquer au texte"
       () => {
         if (indicator) indicator.remove();
+        if (canApply && accumulated.trim()) {
+          // Insérer le bouton "Appliquer" sous le résultat
+          const applyBtn = document.createElement('div');
+          applyBtn.style.cssText = 'margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;';
+          applyBtn.innerHTML = `
+            <button id="ai-apply-btn" style="
+              flex:1;background:var(--accent);color:#fff;border:none;border-radius:8px;
+              padding:9px 14px;font-size:13px;font-weight:600;cursor:pointer;
+              display:flex;align-items:center;justify-content:center;gap:6px;">
+              <i class="fa-solid fa-pen-to-square"></i> Appliquer dans l'éditeur
+            </button>
+          `;
+          applyBtn.querySelector('#ai-apply-btn').addEventListener('click', () => {
+            EditorView.applyAISuggestion(accumulated);
+            applyBtn.innerHTML = `<span style="font-size:12px;color:var(--accent);padding:4px">
+              <i class="fa-solid fa-check"></i> Appliqué — validez ou annulez dans l'éditeur</span>`;
+          });
+          resultDiv.appendChild(applyBtn);
+        }
       },
       // onError
       (errMsg) => {

@@ -11,6 +11,8 @@ const EditorView = (() => {
   let _autosaveInterval = 30000;
   let _spellcheck = true;
   let _focusMode = false;
+  let _originalContent = null;   // Contenu avant suggestion IA
+  let _suggestionActive = false;
 
   const POV_OPTIONS = [
     '', '1ère personne (je)', '3ème personne omnisciente',
@@ -181,6 +183,32 @@ const EditorView = (() => {
           <div class="editor-wrapper">
             <div class="editor-paper">
               <div id="quill-editor" spellcheck="${_spellcheck}"></div>
+            </div>
+          </div>
+
+          <!-- Barre de suggestion IA (masquée par défaut) -->
+          <div id="ai-suggestion-bar" style="display:none;
+            position:sticky;bottom:0;z-index:50;
+            background:linear-gradient(135deg,var(--accent),#5a6340);
+            color:#fff;padding:10px 18px;
+            display:none;align-items:center;justify-content:space-between;
+            border-top:2px solid rgba(255,255,255,0.2);
+            box-shadow:0 -4px 16px rgba(0,0,0,0.15);">
+            <span style="font-size:13px;font-weight:600">
+              <i class="fa-solid fa-wand-magic-sparkles" style="margin-right:6px"></i>
+              Suggestion IA appliquée — que voulez-vous faire ?
+            </span>
+            <div style="display:flex;gap:8px">
+              <button onclick="EditorView.acceptSuggestion()" style="
+                background:#fff;color:var(--accent);border:none;border-radius:6px;
+                padding:6px 16px;font-size:13px;font-weight:700;cursor:pointer;">
+                <i class="fa-solid fa-check"></i> Valider
+              </button>
+              <button onclick="EditorView.rejectSuggestion()" style="
+                background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.4);
+                border-radius:6px;padding:6px 16px;font-size:13px;cursor:pointer;">
+                <i class="fa-solid fa-rotate-left"></i> Revenir à l'original
+              </button>
             </div>
           </div>
 
@@ -396,6 +424,54 @@ const EditorView = (() => {
     } catch (err) { Toast.error(err.message); }
   }
 
+  // ── Suggestion IA inline ──────────────────────────────────────────────────
+
+  function applyAISuggestion(newText) {
+    if (!_quill) return;
+    // Sauvegarder l'original avant remplacement
+    _originalContent = _quill.root.innerHTML;
+    _suggestionActive = true;
+
+    // Remplacer le contenu — convertir le texte brut en HTML paragraphes
+    const html = newText
+      .split('\n')
+      .map(line => line.trim() ? `<p>${line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</p>` : '')
+      .filter(Boolean)
+      .join('');
+    _quill.root.innerHTML = html || `<p>${newText}</p>`;
+
+    // Afficher la barre de validation
+    const bar = document.getElementById('ai-suggestion-bar');
+    if (bar) bar.style.display = 'flex';
+
+    // Désactiver l'autosave pendant la suggestion
+    if (_autosaveTimer) clearInterval(_autosaveTimer);
+
+    Toast.info('Suggestion appliquée — Validez ou revenez à l\'original');
+  }
+
+  function acceptSuggestion() {
+    _originalContent = null;
+    _suggestionActive = false;
+    _isDirty = true;
+    const bar = document.getElementById('ai-suggestion-bar');
+    if (bar) bar.style.display = 'none';
+    saveNow();
+    startAutosave();
+    Toast.success('Modifications validées et sauvegardées !');
+  }
+
+  function rejectSuggestion() {
+    if (!_quill || _originalContent === null) return;
+    _quill.root.innerHTML = _originalContent;
+    _originalContent = null;
+    _suggestionActive = false;
+    const bar = document.getElementById('ai-suggestion-bar');
+    if (bar) bar.style.display = 'none';
+    startAutosave();
+    Toast.info('Texte original restauré');
+  }
+
   function openTranslatePanel() {
     if (!State.aiConfigured) {
       Toast.error('Configurez votre clé API Claude dans Paramètres.');
@@ -472,12 +548,18 @@ const EditorView = (() => {
     if (_autosaveTimer) clearInterval(_autosaveTimer);
     document.removeEventListener('keydown', onKeyDown);
     if (_focusMode) document.body.classList.remove('focus-mode');
+    // Si une suggestion est en cours, revenir silencieusement à l'original
+    if (_suggestionActive && _originalContent !== null && _quill) {
+      _quill.root.innerHTML = _originalContent;
+    }
     _quill = null; _chapter = null; _focusMode = false;
+    _originalContent = null; _suggestionActive = false;
   }
 
   function escHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
   return { render, saveNow, format, formatBlock, formatAlign, formatSize, updateStatus, updatePov,
            toggleSpellcheck, toggleFocus, highlight, runRelecture, cleanup,
-           openTranslatePanel, _copyTranslation };
+           openTranslatePanel, _copyTranslation,
+           applyAISuggestion, acceptSuggestion, rejectSuggestion };
 })();
